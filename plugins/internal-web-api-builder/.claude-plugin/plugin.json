@@ -1,0 +1,8 @@
+{
+  "name": "internal-web-api-builder",
+  "version": "0.1.0",
+  "description": "Разработка SDK, MCP и skills для внутренних веб API по наблюдаемым запросам браузера.",
+  "author": {
+    "name": "RObotiaga"
+  }
+}

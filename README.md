@@ -1,19 +1,28 @@
 # Urgups Blackboard MCP
 
-Независимый Node.js SDK и MCP-сервер для учебного портала [bb.usurt.ru](https://bb.usurt.ru/). Запросы выполняются отдельной HTTP-сессией; открытая вкладка и браузерный профиль не нужны.
+Независимый Node.js SDK и MCP-сервер для учебного портала [bb.usurt.ru](https://bb.usurt.ru/), а также skill для разработки подобных интеграций по внутренним веб API. Blackboard-запросы выполняются отдельной HTTP-сессией; открытая вкладка и браузерный профиль для работы клиента не нужны.
 
 ## Содержание
 
-- [Возможности](#возможности)
+- [Плагины](#плагины)
+- [Возможности Blackboard MCP](#возможности-blackboard-mcp)
 - [Установка](#установка)
   - [Локальный плагин](#локальный-плагин)
   - [Claude Code marketplace](#claude-code-marketplace)
   - [Проверка и настройка](#проверка-и-настройка)
 - [Сопоставление с браузером](#сопоставление-с-браузером)
+- [Skill для внутренних веб API](#skill-для-внутренних-веб-api)
 - [Структура репозитория](#структура-репозитория)
 - [Практики оформления skill и MCP](#практики-оформления-skill-и-mcp)
 
-## Возможности
+## Плагины
+
+| Плагин | Назначение |
+|---|---|
+| [bb-usurt-mcp](plugins/bb-usurt-mcp) | SDK, MCP и skill для bb.usurt.ru |
+| [internal-web-api-builder](plugins/internal-web-api-builder/skills/internal-web-api-builder/SKILL.md) | Переиспользуемый skill для разработки независимых SDK и MCP по наблюдаемым запросам веб-приложений |
+
+## Возможности Blackboard MCP
 
 - Проверка состояния сессии и вход через штатную форму Blackboard.
 - Просмотр своих курсов, поиск курсов каталога и открытие курса.
@@ -64,9 +73,10 @@ claude --plugin-dir .
 ~~~text
 /plugin marketplace add RObotiaga/Urgups_blackboard_mcp
 /plugin install bb-usurt-mcp@urgups-blackboard-mcp
+/plugin install internal-web-api-builder@urgups-blackboard-mcp
 ~~~
 
-Для запуска MCP-сервера требуется Node.js 22+ и установленный пакет HTTPcloak. Установка плагина из marketplace сама по себе не выполняет npm ci; для локальной установки с готовыми зависимостями используй способ выше или настрой запуск сервера по инструкции в [README плагина](plugins/bb-usurt-mcp/README.md).
+Для запуска Blackboard MCP-сервера требуется Node.js 22+ и установленный пакет HTTPcloak. Установка плагина из marketplace сама по себе не выполняет npm ci; для локальной установки с готовыми зависимостями используй способ выше или настрой запуск сервера по инструкции в [README плагина](plugins/bb-usurt-mcp/README.md). Плагин internal-web-api-builder содержит инструкции и не требует npm-зависимостей.
 
 ### Проверка и настройка
 
@@ -90,6 +100,18 @@ npm start
 
 Безопасные эталоны и карта запросов: [captures](plugins/bb-usurt-mcp/captures) и [API_MAP.md](plugins/bb-usurt-mcp/skills/bb-usurt/references/API_MAP.md).
 
+## Skill для внутренних веб API
+
+[internal-web-api-builder](plugins/internal-web-api-builder/skills/internal-web-api-builder/SKILL.md) описывает маршрут от обследования UI и HAR/CDP до отдельного HTTP-клиента, MCP-инструментов и проверки запросов. Он содержит [справочник по захвату и сверке](plugins/internal-web-api-builder/skills/internal-web-api-builder/references/CAPTURE_PARITY.md), [рекомендации по устройству SDK/MCP/skill](plugins/internal-web-api-builder/skills/internal-web-api-builder/references/SDK_MCP_SKILL.md) и [шаблон матрицы доказательств](plugins/internal-web-api-builder/skills/internal-web-api-builder/assets/API_EVIDENCE_TEMPLATE.md).
+
+Для локального запуска в Claude Code из корня checkout:
+
+~~~powershell
+claude --plugin-dir ./plugins/internal-web-api-builder
+~~~
+
+Каталог skill можно также скопировать в пользовательский каталог skills Codex. Для захвата трафика потребуется доступ к браузеру, HAR или другому источнику наблюдений; сам skill не запускает браузер.
+
 ## Структура репозитория
 
 ~~~text
@@ -99,14 +121,17 @@ npm start
 ├── docs/
 │   └── author-skill-practices.md
 └── plugins/
-    └── bb-usurt-mcp/
+    ├── bb-usurt-mcp/
+    │   ├── .claude-plugin/plugin.json
+    │   ├── .mcp.json
+    │   ├── config/
+    │   ├── captures/
+    │   ├── skills/bb-usurt/
+    │   ├── src/
+    │   └── test/
+    └── internal-web-api-builder/
         ├── .claude-plugin/plugin.json
-        ├── .mcp.json
-        ├── config/
-        ├── captures/
-        ├── skills/bb-usurt/
-        ├── src/
-        └── test/
+        └── skills/internal-web-api-builder/
 ~~~
 
 ## Практики оформления skill и MCP
