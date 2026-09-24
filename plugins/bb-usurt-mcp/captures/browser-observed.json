@@ -1,0 +1,235 @@
+{
+  "capturedAt": "2026-09-24",
+  "origin": "https://bb.usurt.ru",
+  "blackboardRelease": "3800.0.4-rel.9+8bf5305",
+  "privacy": "No cookies, session IDs, account IDs, course IDs, grades, file contents, or passwords are stored.",
+  "browserHeaderProfile": {
+    "observedOn": [
+      "GET /webapps/portal/execute/tabs/tabAction",
+      "POST /webapps/portal/dwr_open/call/plaincall/ToolActivityService.getActivityForAllTools.dwr",
+      "POST /webapps/portal/dwr_open/call/plaincall/NautilusViewService.getEwsViewInfo.dwr"
+    ],
+    "headers": {
+      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+      "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": "\"Windows\""
+    },
+    "note": "Captured UA and client hints are applied explicitly. This does not establish TLS identity or header ordering."
+  },
+  "initialDocumentRequest": {
+    "method": "GET",
+    "path": "/webapps/login/",
+    "headers": {
+      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+      "accept-encoding": "gzip, deflate, br, zstd",
+      "accept-language": "ru",
+      "sec-fetch-dest": "document",
+      "sec-fetch-mode": "navigate",
+      "sec-fetch-site": "none",
+      "sec-fetch-user": "?1",
+      "upgrade-insecure-requests": "1",
+      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+      "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": "\"Windows\""
+    },
+    "protocol": "not recorded in this CDP sample",
+    "headerOrder": "not inferable from the captured CDP header map",
+    "cacheControl": "reload-specific; intentionally omitted"
+  },
+  "browserFormCapture": {
+    "feature": "course-search",
+    "sourcePage": {
+      "method": "GET",
+      "path": "/webapps/portal/execute/tabs/tabAction",
+      "queryKeys": ["tab_tab_group_id"],
+      "tabLabel": "Курсы"
+    },
+    "actual": {
+      "method": "POST",
+      "url": "https://bb.usurt.ru/webapps/blackboard/execute/viewCatalog",
+      "contentType": "application/x-www-form-urlencoded",
+      "body": "type=Course&command=NewSearch&searchText=2026"
+    },
+    "bodyFieldOrder": ["type", "command", "searchText"],
+    "bodyBytes": 45,
+    "captureMethod": "Read FormData from the live form submit event after its button handlers; prevented that capture event to avoid a side effect. A separate native click submitted the same form and rendered the catalog page; its HTTP status was not recorded.",
+    "sdkBodyMatchedBrowserBody": true,
+    "comparison": "Live form method, URL, content type, field order and serialized body match the SDK; body comparison was byte-for-byte. The CDP capture did not expose a full wire request or its header order."
+  },
+  "observedRoutes": [
+    {
+      "feature": "course-list",
+      "method": "GET",
+      "path": "/webapps/portal/execute/tabs/tabAction",
+      "queryKeys": ["tab_tab_group_id"],
+      "responseStatus": 200
+    },
+    {
+      "feature": "course-open",
+      "method": "GET",
+      "path": "/webapps/blackboard/execute/launcher",
+      "queryKeys": ["type", "id", "url"]
+    },
+    {
+      "feature": "course-open",
+      "method": "GET",
+      "path": "/webapps/blackboard/execute/courseMain",
+      "queryKeys": ["course_id", "task", "src"]
+    },
+    {
+      "feature": "course-open",
+      "method": "GET",
+      "path": "/webapps/blackboard/content/launchLink.jsp",
+      "queryKeys": ["course_id", "toc_id", "mode"]
+    },
+    {
+      "feature": "course-content-list",
+      "method": "GET",
+      "path": "/webapps/blackboard/content/listContent.jsp",
+      "queryKeys": ["course_id", "content_id", "mode"],
+      "responseStatus": 200
+    },
+    {
+      "feature": "assignment-page",
+      "method": "GET",
+      "path": "/webapps/assignment/uploadAssignment",
+      "queryKeys": ["content_id", "course_id", "group_id", "mode"]
+    },
+    {
+      "feature": "course-file-download",
+      "method": "GET",
+      "pathPattern": "/bbcswebdav/pid-<content-id>-dt-content-rid-<file-id>_1/xid-<file-id>_1",
+      "responseStatus": 200
+    },
+    {
+      "feature": "assignment-attachment-download",
+      "method": "GET",
+      "path": "/webapps/assignment/download",
+      "queryKeys": ["course_id", "attempt_id", "file_id", "fileName"]
+    },
+    {
+      "feature": "course-grade-view",
+      "method": "GET",
+      "path": "/webapps/bb-mygrades-BBLEARN/myGrades",
+      "queryKeys": ["course_id", "stream_name", "is_stream"],
+      "responseStatus": 200
+    },
+    {
+      "feature": "activity-notifications",
+      "method": "POST",
+      "path": "/webapps/portal/dwr_open/call/plaincall/NautilusViewService.getEwsViewInfo.dwr",
+      "contentType": "text/plain",
+      "bodyFieldOrder": [
+        "callCount",
+        "page",
+        "httpSessionId",
+        "scriptSessionId",
+        "c0-scriptName",
+        "c0-methodName",
+        "c0-id",
+        "c0-param0",
+        "batchId"
+      ],
+      "staticBodyFields": {
+        "c0-scriptName": "NautilusViewService",
+        "c0-methodName": "getEwsViewInfo",
+        "c0-id": "0",
+        "c0-param0": "null:null",
+        "batchId": "0 for the first call in a fresh page session"
+      },
+      "dynamicBodyValuesStored": false,
+      "responseStatus": 200,
+      "bodyValuesStored": false,
+      "comparison": "Route, method, content type, field order and static values compared with the browser request. Session IDs and current tab URL remain dynamic."
+    },
+    {
+      "feature": "activity-notifications",
+      "method": "POST",
+      "path": "/webapps/portal/dwr_open/call/plaincall/ToolActivityService.getActivityForAllTools.dwr",
+      "contentType": "text/plain",
+      "bodyFieldOrder": [
+        "callCount",
+        "page",
+        "httpSessionId",
+        "scriptSessionId",
+        "c0-scriptName",
+        "c0-methodName",
+        "c0-id",
+        "c0-param0",
+        "batchId"
+      ],
+      "staticBodyFields": {
+        "callCount": "1",
+        "c0-scriptName": "ToolActivityService",
+        "c0-methodName": "getActivityForAllTools",
+        "c0-id": "0",
+        "c0-param0": "null:null",
+        "batchId": "0 for the first call in a fresh page session"
+      },
+      "dynamicBodyValuesStored": false,
+      "responseStatus": 200,
+      "responseProtocol": "http/1.1",
+      "bodyValuesStored": false
+    },
+    {
+      "feature": "activity-notifications",
+      "method": "POST",
+      "path": "/webapps/blackboard/dwr_open/call/plaincall/NautilusViewService.getEwsViewInfo.dwr",
+      "contentType": "text/plain",
+      "bodyFieldOrder": [
+        "callCount",
+        "page",
+        "httpSessionId",
+        "scriptSessionId",
+        "c0-scriptName",
+        "c0-methodName",
+        "c0-id",
+        "c0-param0",
+        "batchId"
+      ],
+      "staticBodyFields": {
+        "callCount": "1",
+        "c0-scriptName": "NautilusViewService",
+        "c0-methodName": "getEwsViewInfo",
+        "c0-id": "0",
+        "c0-param0": "dynamic string, not stored",
+        "batchId": "0"
+      },
+      "dynamicBodyValuesStored": false,
+      "responseStatus": 200,
+      "responseProtocol": "http/1.1",
+      "bodyValuesStored": false
+    },
+    {
+      "feature": "activity-notifications",
+      "method": "GET",
+      "path": "/webapps/streamViewer/streamViewer",
+      "queryKeys": ["cmd", "streamName", "override_stream", "globalNavigation"],
+      "responseStatus": 200
+    }
+  ],
+  "notExecuted": [
+    {
+      "feature": "enrollment",
+      "observedAs": "A live Blackboard link to /webapps/blackboard/execute/enrollCourse with context and course_id parameters.",
+      "reason": "Following it would enroll the account, so the request was not sent."
+    },
+    {
+      "feature": "file-upload",
+      "observedAs": "Will be submitted through the live Blackboard assignment form with the selected file.",
+      "reason": "No assignment submission was made."
+    },
+    {
+      "feature": "test-attempt",
+      "observedAs": "The test form route was not captured.",
+      "reason": "No test link was opened and no attempt was started or submitted; exact test request parity is unverified."
+    },
+    {
+      "feature": "file-upload",
+      "observedAs": "The inspected assignment page did not expose a file input in its HTML form.",
+      "reason": "No assignment submission was made; the generic HTML multipart path is not validated against a live Blackboard upload form."
+    }
+  ]
+}

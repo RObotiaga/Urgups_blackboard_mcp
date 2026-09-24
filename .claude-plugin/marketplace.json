@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "urgups-blackboard-mcp",
+  "version": "1.0.0",
+  "description": "Независимый SDK, MCP и skill для учебного портала bb.usurt.ru",
+  "owner": {
+    "name": "RObotiaga"
+  },
+  "plugins": [
+    {
+      "name": "bb-usurt-mcp",
+      "description": "Blackboard bb.usurt.ru: курсы, материалы, задания, уведомления, файлы, зачисление и тесты",
+      "source": "./plugins/bb-usurt-mcp",
+      "category": "productivity"
+    }
+  ]
+}

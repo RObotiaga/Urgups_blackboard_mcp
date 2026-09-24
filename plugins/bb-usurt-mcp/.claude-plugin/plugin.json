@@ -1,0 +1,8 @@
+{
+  "name": "bb-usurt-mcp",
+  "version": "0.1.0",
+  "description": "Blackboard bb.usurt.ru: поиск курсов, материалы, задания, файлы, уведомления, зачисление и тесты через отдельный HTTP SDK и MCP.",
+  "author": {
+    "name": "RObotiaga"
+  }
+}
