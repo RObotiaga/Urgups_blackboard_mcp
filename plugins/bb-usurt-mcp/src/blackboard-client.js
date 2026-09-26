@@ -11,6 +11,7 @@ const assignmentWords = /задан|домашн|assignment/i;
 const testWords = /тест|экзам|зач[её]т|assessment|test/i;
 const fileExtension = /\.(pdf|docx?|xlsx?|pptx?|zip|rar|7z|txt|rtf|jpg|jpeg|png|mp4)(?:$|[?#])/i;
 const activityWords = /уведомлен|новости|активност|activity|notification|stream/i;
+const announcementWords = /объявлен|announc|announcement/i;
 const fileMimeTypes = new Map([
   [".pdf", "application/pdf"], [".txt", "text/plain"], [".rtf", "application/rtf"],
   [".doc", "application/msword"], [".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
@@ -97,10 +98,32 @@ function parseLinks(html, pageUrl) {
     else if (testWords.test(`${label} ${route}`) || /assessment|test/i.test(route)) kind = "test";
     else if (assignmentWords.test(`${label} ${route}`) || /assignment/i.test(route)) kind = "assignment";
     else if (route === BB_ROUTES.activityStream || activityWords.test(`${label} ${route}`)) kind = "activity";
+    else if (announcementWords.test(`${label} ${route}`)) kind = "announcement";
     else if ([BB_ROUTES.contentList, BB_ROUTES.contentTool].includes(route)) kind = "course-content";
     result.push({ kind, label, href: url.href, path: url.pathname });
   }
   return result;
+}
+
+export function parseCourseCatalogEntries(html) {
+  const entries = [];
+  const seen = new Set();
+  for (const [, row] of html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr\s*>/gi)) {
+    const text = cleanText(row);
+    const match = text.match(/Название курса:\s*(.*?)\s+Инструктор:\s*(.*?)(?:\s+Описание:|\s+Учебники:|$)/i);
+    if (!match) continue;
+    const courseName = match[1].trim();
+    const instructor = match[2].trim();
+    const key = `${courseName.toLocaleLowerCase()}\u0000${instructor.toLocaleLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const enrollmentAvailable = [...row.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi)].some(([, attributes, label]) => {
+      const parsed = parseAttributes(attributes);
+      return /зачислить/i.test(`${cleanText(label)} ${parsed.title || ""}`);
+    });
+    entries.push({ kind: "course-catalog", label: courseName, courseName, instructor, enrollmentAvailable });
+  }
+  return entries;
 }
 
 function formControls(markup) {
@@ -157,6 +180,54 @@ function parseForms(html, pageUrl) {
     });
   }
   return forms;
+}
+
+function parsePortalAjaxModule(html, marker) {
+  const modules = [...html.matchAll(/<div\b[^>]*\bid=["']module:([^"']+)["'][^>]*>/gi)];
+  for (let index = 0; index < modules.length; index++) {
+    const start = modules[index].index;
+    const end = modules[index + 1]?.index ?? html.length;
+    const block = html.slice(start, end);
+    if (!block.includes(marker)) continue;
+    const endpoint = block.match(/new Ajax\.Request\(\s*(['"])([^'"]+)\1/i)?.[2];
+    const method = block.match(/method:\s*(['"])(get|post)\1/i)?.[2]?.toUpperCase();
+    const encodedBody = block.match(/parameters:\s*(['"])((?:\\.|[^'"\\])*)\1/i)?.[2];
+    if (!endpoint || !method || !encodedBody) throw new Error('The live Blackboard module request changed; refusing to guess its request.');
+    const body = encodedBody.replace(/\\x([0-9a-f]{2})/gi, (_match, hex) => String.fromCharCode(Number.parseInt(hex, 16))).replace(/\\([\\'"])/g, '$1');
+    return { moduleId: modules[index][1], endpoint, method, body };
+  }
+  throw new Error('Could not find the expected live Blackboard module on the page.');
+}
+
+function parseXmlContents(xml) {
+  const contents = xml.match(/<contents\b[^>]*>([\s\S]*?)<\/contents>/i)?.[1];
+  if (contents === undefined) throw new Error('Blackboard module response did not contain the expected <contents> element.');
+  const cdata = contents.match(/^\s*<!\[CDATA\[([\s\S]*)\]\]>\s*$/i)?.[1];
+  return cdata ?? decodeEntities(contents);
+}
+
+const russianMonths = new Map([
+  ['января', '01'], ['февраля', '02'], ['марта', '03'], ['апреля', '04'], ['мая', '05'], ['июня', '06'],
+  ['июля', '07'], ['августа', '08'], ['сентября', '09'], ['октября', '10'], ['ноября', '11'], ['декабря', '12'],
+]);
+
+function assignmentDueDate(text) {
+  const match = text.match(/Дата выполнения\s+(\d{1,2})\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)\s+(\d{4})\s*г\.?\s*(\d{1,2}):(\d{2})/i);
+  if (!match) return { dueDate: null, dueDateLabel: null };
+  const [, day, month, year, hour, minute] = match;
+  const dueDate = year + '-' + russianMonths.get(month.toLowerCase()) + '-' + day.padStart(2, '0') + 'T' + hour.padStart(2, '0') + ':' + minute;
+  return { dueDate, dueDateLabel: day + ' ' + month + ' ' + year + ' г. ' + hour.padStart(2, '0') + ':' + minute };
+}
+
+function assignmentSubmissionStatus(page) {
+  const text = page.text || '';
+  const title = decodeEntities(page.title || '');
+  const submitted = /Просмотреть историю отправки|Последняя оцененная попытка|Попытка\s*\(задержка\)/i.test(text + ' ' + title);
+  const submissionForm = (page.forms || []).some(form => form.method === 'POST' && form.action === '/webapps/assignment/uploadAssignment');
+  return {
+    submissionStatus: submitted ? 'submitted' : submissionForm ? 'not-submitted' : 'unknown',
+    canSubmit: submissionForm && !submitted,
+  };
 }
 
 function describeForm(form) {
@@ -383,10 +454,6 @@ export function buildDwrEwsViewInfoRequest({ pageUrl, httpSessionId, scriptSessi
   return buildDwrRequest({ pageUrl, httpSessionId, scriptSessionId, serviceName: "NautilusViewService", methodName: "getEwsViewInfo", dwrBasePath, batchId });
 }
 
-export function buildDwrToolActivityRequest({ pageUrl, httpSessionId, scriptSessionId, batchId = 0, dwrBasePath = "/webapps/portal/dwr_open" }) {
-  return buildDwrRequest({ pageUrl, httpSessionId, scriptSessionId, serviceName: "ToolActivityService", methodName: "getActivityForAllTools", dwrBasePath, batchId });
-}
-
 export class BbUsurtClient {
   constructor({ transport = new HttpCloakTransport(), username = process.env.BB_USURT_USERNAME, password = process.env.BB_USURT_PASSWORD, downloadDir = process.env.BB_USURT_DOWNLOAD_DIR || path.resolve("downloads") } = {}) {
     this.transport = transport;
@@ -397,6 +464,10 @@ export class BbUsurtClient {
     this.lastUrl = BB_ORIGIN;
     this.lastTrace = null;
     this.traceHistory = [];
+    this.coursesCache = null;
+    this.calendarContext = null;
+    this.calendarEventsCache = null;
+    this.contentIndexCache = null;
   }
 
   async request(input, { method = "GET", headers = {}, body, contentType, referer, fetchMode = "navigate", maxRedirects = 10, streaming = false, formFields, fileCount = 0 } = {}) {
@@ -506,6 +577,10 @@ export class BbUsurtClient {
     const checkUrl = check.url || this.lastUrl;
     this.authenticated = !(/\/webapps\/login\//i.test(checkUrl) && /name=["']user_id["']/i.test(checkHtml));
     if (!this.authenticated) throw new Error("Blackboard returned to the login page; check whether this account requires an additional sign-in step.");
+    this.coursesCache = null;
+    this.calendarContext = null;
+    this.calendarEventsCache = null;
+    this.contentIndexCache = null;
     return { authenticated: true, url: `${new URL(checkUrl).origin}${new URL(checkUrl).pathname}`, title: cleanText(checkHtml.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "") };
   }
 
@@ -515,23 +590,65 @@ export class BbUsurtClient {
     await this.login();
   }
 
-  async listCourses() {
-    await this.ensureAuthenticated();
-    const page = await this.#readPage(`${BB_ROUTES.courseTab}?tab_tab_group_id=_1_1`);
-    const courses = parseLinks(page.text, page.url)
-      .filter(link => link.kind === "course")
-      .map(link => ({ ...link, courseId: new URL(link.href).searchParams.get("id") }));
-    return { url: `${new URL(page.url).origin}${new URL(page.url).pathname}`, title: page.title, courses, request: this.lastTrace?.request };
-  }
-
-  async #readCatalogFormPage() {
-    const portal = await this.#readPage(`${BB_ROUTES.courseTab}?tab_tab_group_id=_1_1`);
+  async #readCoursesTab() {
+    const portal = await this.#readPage(BB_ROUTES.courseTab + "?tab_tab_group_id=_1_1");
     const coursesTab = parseLinks(portal.text, portal.url).find(link =>
       link.path === BB_ROUTES.courseTab && /(?:^|\s)курсы(?:\s|$)/i.test(link.label),
     );
-    if (!coursesTab) throw new Error("Could not find the live Blackboard Courses tab that contains the catalog form.");
+    if (!coursesTab) throw new Error("Could not find the live Blackboard Courses tab.");
     if (new URL(coursesTab.href).href === new URL(portal.url).href) return portal;
     return this.#readPage(coursesTab.href, { referer: portal.url });
+  }
+
+  async listCourses({ refresh = false } = {}) {
+    await this.ensureAuthenticated();
+    if (refresh) this.contentIndexCache = null;
+    if (!refresh && this.coursesCache && this.coursesCache.expiresAt > Date.now()) {
+      return { ...this.coursesCache.result, courses: this.coursesCache.result.courses.map(course => ({ ...course })), cacheHit: true, requestCount: 0 };
+    }
+    const traceStart = this.traceHistory.length;
+    const page = await this.#readCoursesTab();
+    const module = parsePortalAjaxModule(page.text, "extid:learning/coursetab-courses:");
+    const endpoint = new URL(module.endpoint, page.url);
+    if (endpoint.origin !== BB_ORIGIN || endpoint.pathname !== BB_ROUTES.courseTab) throw new Error("The live course module points to an unexpected Blackboard endpoint; refusing to send it.");
+    const parameters = new URLSearchParams(module.body);
+    if (module.method !== "POST" || parameters.get("action") !== "refreshAjaxModule" || parameters.get("modId") !== module.moduleId) {
+      throw new Error("The live course module request changed; refusing to send a different request.");
+    }
+    const response = await this.request(endpoint.href, {
+      method: module.method,
+      body: module.body,
+      contentType: "application/x-www-form-urlencoded; charset=UTF-8",
+      referer: page.url,
+      headers: {
+        "Content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+        Origin: BB_ORIGIN,
+        "X-Requested-With": "XMLHttpRequest",
+        "X-Prototype-Version": "1.7",
+        Accept: "text/javascript, text/html, application/xml, text/xml, */*",
+      },
+      fetchMode: "cors",
+    });
+    if (!response.ok) throw new Error("Blackboard course module returned HTTP " + response.status + ".");
+    const moduleHtml = parseXmlContents(await response.text());
+    const courses = parseLinks(moduleHtml, page.url)
+      .filter(link => link.kind === "course")
+      .map(link => ({ ...link, courseId: new URL(link.href).searchParams.get("id") }));
+    const result = {
+      url: new URL(page.url).origin + new URL(page.url).pathname,
+      title: page.title,
+      courses,
+      request: this.lastTrace?.request,
+      browserParity: "The module endpoint and ordered body come from the live Courses-tab Ajax.Request. CDP confirms the route, body shape/length, and safe headers; dynamic IDs, wire header order, and TLS fingerprint are not compared.",
+      cacheHit: false,
+      requestCount: this.traceHistory.length - traceStart,
+    };
+    this.coursesCache = { result, expiresAt: Date.now() + 90_000 };
+    return { ...result, courses: result.courses.map(course => ({ ...course })) };
+  }
+
+  async #readCatalogFormPage() {
+    return this.#readCoursesTab();
   }
 
   async searchCourses(query) {
@@ -564,8 +681,357 @@ export class BbUsurtClient {
     });
     const html = await response.text();
     const url = response.url || this.lastUrl;
-    const courses = parseLinks(html, url).filter(link => link.kind === "course").map(link => ({ ...link, courseId: new URL(link.href).searchParams.get("id") }));
+    const catalogEntries = parseCourseCatalogEntries(html);
+    const courses = catalogEntries.length
+      ? catalogEntries
+      : parseLinks(html, url).filter(link => link.kind === "course").map(link => ({ ...link, courseId: new URL(link.href).searchParams.get("id") }));
     return { status: response.status, url: `${new URL(url).origin}${new URL(url).pathname}`, title: cleanText(html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1] || ""), courses, request: this.lastTrace?.request, browserParity: "Method, URL, content type and form body match the live Courses-tab form; body parity is byte-for-byte." };
+  }
+
+  async listAssignments({ courseYear, courseHref, availableOnly = true, limit = 500, maxFoldersPerCourse = 1 } = {}) {
+    await this.ensureAuthenticated();
+    const traceStart = this.traceHistory.length;
+    if (!Number.isInteger(maxFoldersPerCourse) || maxFoldersPerCourse < 1 || maxFoldersPerCourse > 500) throw new Error("maxFoldersPerCourse must be an integer from 1 to 500.");
+    const contentIndex = await this.scanCourseContent({ courseHref, courseYear, kind: "assignment", limit: 500, maxFoldersPerCourse });
+    const courseResult = await this.listCourses();
+    let courses = courseResult.courses;
+    if (courseHref) {
+      const target = ensureSameOrigin(courseHref, this.lastUrl).href;
+      courses = courses.filter(course => new URL(course.href).href === target);
+      if (!courses.length) throw new Error("The requested course link is not present in the current Blackboard Courses tab.");
+    }
+    if (courseYear) courses = courses.filter(course => course.label.includes(String(courseYear)));
+    const assignments = [];
+    const warnings = [...contentIndex.warnings];
+    const foldersRead = contentIndex.foldersRead;
+    const assignmentPath = "/webapps/assignment/uploadAssignment";
+    if (contentIndex.truncated) warnings.push({ message: "Assignment links were capped at 500 before assignment pages were read." });
+    for (const course of courses) {
+      try {
+        const courseId = course.courseId || new URL(course.href).searchParams.get("id");
+        const assignmentLinks = contentIndex.items.filter(link => link.courseId === courseId && link.path === assignmentPath);
+        for (const link of assignmentLinks) {
+          const page = await this.getPage(link.href);
+          const state = assignmentSubmissionStatus(page);
+          if (availableOnly && !state.canSubmit) continue;
+          const due = assignmentDueDate(page.text);
+          assignments.push({
+            course: course.label,
+            courseId,
+            title: link.label,
+            href: link.href,
+            dueDate: due.dueDate,
+            dueDateLabel: due.dueDateLabel,
+            submissionStatus: state.submissionStatus,
+            canSubmit: state.canSubmit,
+          });
+        }
+      } catch (error) {
+        warnings.push({ course: course.label, message: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    assignments.sort((a, b) => {
+      if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate) || a.title.localeCompare(b.title, "ru");
+      if (a.dueDate) return -1;
+      if (b.dueDate) return 1;
+      return a.course.localeCompare(b.course, "ru") || a.title.localeCompare(b.title, "ru");
+    });
+    const resultLimit = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), 500) : 500;
+    return {
+      coursesScanned: courses.length,
+      foldersRead,
+      requestCount: this.traceHistory.length - traceStart,
+      availableOnly,
+      totalAssignments: assignments.length,
+      truncated: assignments.length > resultLimit,
+      complete: warnings.length === 0 && assignments.length <= resultLimit,
+      assignments: assignments.slice(0, resultLimit),
+      warnings,
+      note: "Assignment pages were read only. No files or forms were submitted, and no tests were started. Due dates are portal-local; assignments without a due date sort last.",
+    };
+  }
+
+  async #assertEnrolledAssignment(href) {
+    const url = ensureSameOrigin(href, this.lastUrl);
+    if (url.pathname !== "/webapps/assignment/uploadAssignment") throw new Error("The supplied link is not a Blackboard assignment page.");
+    const courseId = url.searchParams.get("course_id");
+    const enrolledIds = new Set((await this.listCourses()).courses.map(course => course.courseId).filter(Boolean));
+    if (!courseId || !enrolledIds.has(courseId)) throw new Error("This assignment does not belong to a course listed on your current Blackboard Courses tab.");
+    return url;
+  }
+
+  async assignmentDetails(href) {
+    await this.#assertEnrolledAssignment(href);
+    const page = await this.getPage(href);
+    if (new URL(page._pageUrl).pathname !== "/webapps/assignment/uploadAssignment") {
+      throw new Error("The supplied link is not a Blackboard assignment page.");
+    }
+    const state = assignmentSubmissionStatus(page);
+    const due = assignmentDueDate(page.text);
+    return {
+      url: page.url,
+      title: page.title,
+      text: page.text,
+      dueDate: due.dueDate,
+      dueDateLabel: due.dueDateLabel,
+      submissionStatus: state.submissionStatus,
+      canSubmit: state.canSubmit,
+      forms: page.forms,
+    };
+  }
+
+  async listMySubmissions({ courseYear, courseHref, limit = 500, maxFoldersPerCourse = 1 } = {}) {
+    const result = await this.listAssignments({ courseYear, courseHref, availableOnly: false, limit, maxFoldersPerCourse });
+    const { assignments, ...summary } = result;
+    return {
+      ...summary,
+      submissions: assignments.map(({ course, courseId, title, href, dueDate, dueDateLabel, submissionStatus, canSubmit }) => ({
+        course, courseId, title, href, dueDate, dueDateLabel, submissionStatus, canSubmit,
+      })),
+      note: "Blackboard exposes submission state on assignment pages. 'submitted' is inferred from the server-rendered page; 'unknown' means the page did not expose a recognizable status.",
+    };
+  }
+
+  async submitAssignment({ href, fields = {}, filePath, submitterName, confirmed = false }) {
+    await this.#assertEnrolledAssignment(href);
+    const page = await this.getPage(href);
+    if (new URL(page._pageUrl).pathname !== "/webapps/assignment/uploadAssignment") {
+      throw new Error("The supplied link is not a Blackboard assignment page.");
+    }
+    const formIndex = page._forms.findIndex(form => form.method === "POST" && new URL(form.action).pathname === "/webapps/assignment/uploadAssignment");
+    if (formIndex < 0) throw new Error("This assignment page does not expose a supported submission form.");
+    const result = await this.submitForm({ page, formIndex, fields, filePath, submitterName, confirmed });
+    return {
+      ...result,
+      note: confirmed
+        ? "Blackboard received the form request; inspect the returned page and bb_assignment_details to verify the submission state."
+        : "Preview only. Re-call with confirmed=true only after checking the course, assignment, fields, and file.",
+    };
+  }
+
+  async scanCourseContent({ query = "", courseHref, courseYear, kind = "any", limit = 100, maxFoldersPerCourse = 1 } = {}) {
+    await this.ensureAuthenticated();
+    const traceStart = this.traceHistory.length;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error("limit must be an integer from 1 to 500.");
+    if (!Number.isInteger(maxFoldersPerCourse) || maxFoldersPerCourse < 1 || maxFoldersPerCourse > 500) throw new Error("maxFoldersPerCourse must be an integer from 1 to 500.");
+    const allowedKinds = new Set(["any", "file", "assignment", "test", "announcement", "course-content"]);
+    if (!allowedKinds.has(kind)) throw new Error("Unsupported content kind.");
+    const result = await this.listCourses();
+    let courses = result.courses;
+    if (courseHref) {
+      const target = ensureSameOrigin(courseHref, this.lastUrl).href;
+      courses = courses.filter(course => new URL(course.href).href === target);
+      if (!courses.length) throw new Error("Only courses present in the current Blackboard Courses tab can be scanned.");
+    }
+    if (courseYear) courses = courses.filter(course => course.label.includes(String(courseYear)));
+    const matcher = query ? new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") : null;
+    const cacheKey = `${courses.map(course => course.courseId).sort().join(",")}|${maxFoldersPerCourse}`;
+    let index = this.contentIndexCache?.key === cacheKey && this.contentIndexCache.expiresAt > Date.now() ? this.contentIndexCache : null;
+    const cacheHit = Boolean(index);
+    if (!index) {
+      const items = new Map();
+      const warnings = [];
+      let foldersRead = 0;
+      let pagesRead = 0;
+      for (const course of courses) {
+        try {
+          const queue = [course.href];
+          const seenPages = new Set();
+          const queuedFolders = new Set();
+          let courseFolderCount = 0;
+          let folderLimitReached = false;
+          while (queue.length && courseFolderCount <= maxFoldersPerCourse) {
+            const pageHref = queue.shift();
+            if (seenPages.has(pageHref)) continue;
+            seenPages.add(pageHref);
+            pagesRead++;
+            const page = await this.getPage(pageHref);
+            for (const link of parseLinks(page._rawHtml, page._pageUrl)) {
+              if (link.path === BB_ROUTES.contentList && !seenPages.has(link.href) && !queuedFolders.has(link.href)) {
+                if (courseFolderCount >= maxFoldersPerCourse) folderLimitReached = true;
+                else {
+                  queue.push(link.href);
+                  queuedFolders.add(link.href);
+                  courseFolderCount++;
+                  foldersRead++;
+                }
+              }
+              if (link.kind === "link" && announcementWords.test(`${link.label} ${link.path}`)) link.kind = "announcement";
+              items.set(link.href, { ...link, course: course.label, courseId: course.courseId });
+            }
+          }
+          if (queue.length || folderLimitReached) warnings.push({ course: course.label, message: "Folder scan limit reached; some items may be missing." });
+        } catch (error) {
+          warnings.push({ course: course.label, message: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      index = { key: cacheKey, items: [...items.values()], warnings, foldersRead, pagesRead, expiresAt: Date.now() + 300_000 };
+      this.contentIndexCache = index;
+    }
+    const matches = index.items
+      .filter(item => (kind === "any" || item.kind === kind) && (!matcher || matcher.test(item.label)))
+      .sort((a, b) => a.course.localeCompare(b.course, "ru") || a.label.localeCompare(b.label, "ru"));
+    return {
+      coursesScanned: courses.length,
+      foldersRead: index.foldersRead,
+      pagesRead: index.pagesRead,
+      indexCacheHit: cacheHit,
+      requestCount: this.traceHistory.length - traceStart,
+      total: matches.length,
+      truncated: matches.length > limit,
+      complete: index.warnings.length === 0 && matches.length <= limit,
+      items: matches.slice(0, limit),
+      warnings: index.warnings,
+      note: "Scans only courses listed on the current Blackboard Courses tab. Search uses item link titles; content bodies are not opened or indexed. The shallow traversal checks at most one folder per course by default; raise maxFoldersPerCourse for deeper searches. The link index is cached in memory for five minutes to reuse the traversal across file, content, and announcement searches.",
+    };
+  }
+
+  async #readCalendarEventFeed({ daysBack, daysAhead }) {
+    const start = new Date(); start.setHours(0, 0, 0, 0); start.setDate(start.getDate() - daysBack);
+    const end = new Date(); end.setHours(23, 59, 59, 999); end.setDate(end.getDate() + daysAhead);
+    const range = { start: start.toISOString(), end: end.toISOString() };
+    const cacheKey = `${start.getTime()}:${end.getTime()}`;
+    if (this.calendarEventsCache?.key === cacheKey && this.calendarEventsCache.expiresAt > Date.now()) {
+      return { ...this.calendarEventsCache, requestCount: 0, cacheHit: true, calendarContextCacheHit: true };
+    }
+    const traceStart = this.traceHistory.length;
+    const calendarContextCacheHit = this.calendarContext?.expiresAt > Date.now();
+    const calendarUrl = await this.#getCalendarPageUrl();
+    const eventUrl = `${BB_ORIGIN}/webapps/calendar/calendarData/selectedCalendarEvents?start=${start.getTime()}&end=${end.getTime()}&course_id=&mode=personal`;
+    const response = await this.request(eventUrl, { referer: calendarUrl, headers: { Accept: "*/*", "X-Requested-With": "XMLHttpRequest" }, fetchMode: "cors" });
+    if (!response.ok) throw new Error(`Blackboard calendar events returned HTTP ${response.status}.`);
+    let events;
+    try { events = JSON.parse(await response.text()); } catch { throw new Error("Blackboard returned an unreadable calendar event list."); }
+    if (!Array.isArray(events)) throw new Error("The Blackboard calendar response has an unexpected shape.");
+    const result = {
+      key: cacheKey,
+      events,
+      range,
+      expiresAt: Date.now() + 15_000,
+      requestCount: this.traceHistory.length - traceStart,
+      cacheHit: false,
+      calendarContextCacheHit,
+    };
+    this.calendarEventsCache = result;
+    return result;
+  }
+
+  async listCalendarEvents({ daysBack = 30, daysAhead = 365 } = {}) {
+    await this.ensureAuthenticated();
+    for (const [name, value] of [["daysBack", daysBack], ["daysAhead", daysAhead]]) {
+      if (!Number.isInteger(value) || value < 0 || value > 3660) throw new Error(`${name} must be an integer from 0 to 3660.`);
+    }
+    const feed = await this.#readCalendarEventFeed({ daysBack, daysAhead });
+    const events = feed.events;
+    return {
+      total: events.length,
+      range: feed.range,
+      events: events.map(event => ({
+        course: event.calendarNameLocalizable?.rawValue || event.calendarName || "",
+        title: cleanText(event.title || "Без названия"),
+        start: event.start || null,
+        end: event.end || null,
+        eventType: event.eventType || null,
+        attemptable: event.attemptable === true,
+        href: typeof event.url === "string" && event.url.startsWith("/") ? new URL(event.url, BB_ORIGIN).href : null,
+      })).sort((a, b) => String(a.start || "").localeCompare(String(b.start || ""))),
+      requestCount: feed.requestCount,
+      cacheHit: feed.cacheHit,
+      calendarContextCacheHit: feed.calendarContextCacheHit,
+      note: "Uses the same selected-calendar feed as the Blackboard UI. Results follow the calendars selected in Blackboard settings.",
+    };
+  }
+
+  async #getCalendarPageUrl() {
+    if (this.calendarContext?.expiresAt > Date.now()) return this.calendarContext.url;
+    const portal = await this.#readPage(`${BB_ROUTES.courseTab}?tab_tab_group_id=_1_1`);
+    const calendarLink = parseLinks(portal.text, portal.url).find(link => /календар/i.test(link.label));
+    if (!calendarLink) throw new Error("The live Blackboard portal does not expose its Calendar link.");
+    const calendarPage = await this.#readPage(calendarLink.href, { referer: portal.url });
+    if (!new Set(["/webapps/blackboard/execute/viewCalendar", "/webapps/calendar/viewPersonal"]).has(new URL(calendarPage.url).pathname)) throw new Error("The live Blackboard Calendar link points to an unexpected page.");
+    this.calendarContext = { url: calendarPage.url, expiresAt: Date.now() + 60_000 };
+    return calendarPage.url;
+  }
+
+  async readGrades({ courseHref } = {}) {
+    await this.ensureAuthenticated();
+    if (!courseHref) throw new Error("Provide courseHref to read grades for one enrolled course; omitting it would scan every course.");
+    const courses = (await this.listCourses()).courses;
+    let selected = courses;
+    if (courseHref) {
+      const target = ensureSameOrigin(courseHref, this.lastUrl).href;
+      selected = courses.filter(course => new URL(course.href).href === target);
+      if (!selected.length) throw new Error("Only courses listed on the current Blackboard Courses tab can be queried.");
+    }
+    const grades = [];
+    const warnings = [];
+    for (const course of selected) {
+      try {
+        const page = await this.getPage(course.href);
+        const links = parseLinks(page._rawHtml, page._pageUrl);
+        const href = links.find(link => new URL(link.href).pathname === BB_ROUTES.myGrades)?.href;
+        if (!href) { warnings.push({ course: course.label, message: "No live My Grades link was exposed by this course page." }); continue; }
+        const gradePage = await this.getPage(href);
+        const rows = [...gradePage._rawHtml.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr\s*>/gi)].map(([, row]) => [...row.matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]\s*>/gi)].map(([, cell]) => cleanText(cell))).filter(row => row.length);
+        grades.push({ course: course.label, title: gradePage.title, rows, text: gradePage.text });
+      } catch (error) { warnings.push({ course: course.label, message: error instanceof Error ? error.message : String(error) }); }
+    }
+    return { coursesScanned: selected.length, grades, warnings, note: "Grade rows are extracted from server-rendered My Grades tables; layout variations may require an updated parser." };
+  }
+
+  async testDetails({ coursePageHref, testHref }) {
+    const coursePageUrl = ensureSameOrigin(coursePageHref, this.lastUrl);
+    const courseId = coursePageUrl.searchParams.get("course_id") || coursePageUrl.searchParams.get("id");
+    const enrolledIds = new Set((await this.listCourses()).courses.map(course => course.courseId).filter(Boolean));
+    if (!courseId || !enrolledIds.has(courseId)) throw new Error("Test details can only be read from a course listed on your current Blackboard Courses tab.");
+    const page = await this.getPage(coursePageHref);
+    const tests = parseLinks(page._rawHtml, page._pageUrl).filter(link => link.kind === "test");
+    const selected = testHref ? tests.filter(link => link.href === ensureSameOrigin(testHref, page._pageUrl).href) : tests;
+    if (testHref && !selected.length) throw new Error("The supplied test link was not present on the provided course page; no test was opened.");
+    return { coursePage: page.url, tests: selected, count: selected.length, note: "Read from the course content page only. This tool never opens a test launch URL, creates an attempt, or starts a timer." };
+  }
+
+  async listAnnouncements({ courseHref, courseYear, limit = 100, maxFoldersPerCourse = 1 } = {}) {
+    const result = await this.scanCourseContent({ courseHref, courseYear, kind: "announcement", limit, maxFoldersPerCourse });
+    return { ...result, note: "Announcement links are discovered on currently enrolled course pages. Blackboard may expose announcements through a separate tool or feed not linked from course content." };
+  }
+
+  async listUpcomingAssignments({ daysBack = 0, daysAhead = 365 } = {}) {
+    await this.ensureAuthenticated();
+    for (const [name, value] of [["daysBack", daysBack], ["daysAhead", daysAhead]]) {
+      if (!Number.isInteger(value) || value < 0 || value > 3660) throw new Error(`${name} must be an integer from 0 to 3660.`);
+    }
+
+    const feed = await this.#readCalendarEventFeed({ daysBack, daysAhead });
+    const { events, range } = feed;
+
+    const assignments = events
+      .filter(event => typeof event?.eventType === "string" && assignmentWords.test(event.eventType))
+      .map(event => ({
+        course: event.calendarNameLocalizable?.rawValue || event.calendarName || "",
+        title: cleanText(event.title || "Без названия"),
+        dueDate: typeof event.start === "string" ? event.start : null,
+        eventType: event.eventType,
+        attemptable: event.attemptable === true,
+        submissionStatus: "not reported by the global calendar",
+      }))
+      .filter(event => event.dueDate)
+      .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.title.localeCompare(b.title, "ru"));
+
+    return {
+      source: "Blackboard global calendar",
+      coursePagesRead: 0,
+      courseFoldersRead: 0,
+      calendarsWithEvents: new Set(events.map(event => event?.calendarId).filter(id => id && !["PERSONAL", "INSTITUTION"].includes(id))).size,
+      calendarEvents: events.length,
+      requestCount: feed.requestCount,
+      cacheHit: feed.cacheHit,
+      calendarContextCacheHit: feed.calendarContextCacheHit,
+      totalAssignments: assignments.length,
+      range,
+      assignments,
+      note: "Uses the same selected-calendar event feed as the Blackboard UI. Results follow the calendars currently selected in Blackboard settings and include due-dated assignment events only; the calendar does not report submission status or undated assignments. attemptable reflects Blackboard's calendar flag, not a verified submission state.",
+    };
   }
 
   async getPage(input, { confirm = false } = {}) {
@@ -589,7 +1055,7 @@ export class BbUsurtClient {
   }
 
   #isActionRoute(url) {
-    return url.pathname === BB_ROUTES.enrollment || /(?:take|start|begin|attempt|launch)test|assessment.*(?:start|take|attempt)/i.test(`${url.pathname}?${url.searchParams.toString()}`);
+    return url.pathname === BB_ROUTES.enrollment || /(?:launch|take|start|begin|attempt)(?:assessment|test)|(?:assessment|test).*(?:launch|start|take|attempt)/i.test(`${url.pathname}?${url.searchParams.toString()}`);
   }
 
   async enrollCourse(href, confirmed) {
@@ -598,6 +1064,8 @@ export class BbUsurtClient {
     const url = ensureSameOrigin(href, this.lastUrl);
     if (url.pathname !== BB_ROUTES.enrollment) throw new Error("The supplied URL is not a Blackboard enrollment link.");
     const page = await this.#readPage(url.href, { referer: this.lastUrl });
+    this.coursesCache = null;
+    this.contentIndexCache = null;
     return { status: page.response.status, url: `${new URL(page.url).origin}${new URL(page.url).pathname}`, title: page.title, text: cleanText(page.text).slice(0, 4000), request: this.lastTrace?.request };
   }
 
@@ -613,10 +1081,8 @@ export class BbUsurtClient {
     await this.ensureAuthenticated();
     const traceStart = this.traceHistory.length;
     let target = href;
-    let portalActivity = null;
     if (!target) {
       const portal = await this.#readPage(`${BB_ROUTES.courseTab}?tab_tab_group_id=_1_1`);
-      portalActivity = await this.#readToolActivity(portal);
       const link = parseLinks(portal.text, portal.url).find(item => item.kind === "activity");
       if (link) target = link.href;
       else target = BB_ROUTES.activityStream;
@@ -624,7 +1090,7 @@ export class BbUsurtClient {
     const page = await this.#readPage(ensureSameOrigin(target, this.lastUrl).href, { referer: this.lastUrl });
     let ews = null;
     if (new URL(page.url).pathname === BB_ROUTES.courseTab) ews = await this.#readEwsViewInfo(page);
-    const dwr = portalActivity || ews ? { toolActivity: portalActivity, ews } : null;
+    const dwr = ews ? { ews } : null;
     return {
       status: page.response.status,
       url: `${new URL(page.url).origin}${new URL(page.url).pathname}`,
@@ -675,10 +1141,6 @@ export class BbUsurtClient {
     return { method: `${serviceName}.${methodName}`, reply };
   }
 
-  async #readToolActivity(page) {
-    return this.#callDwrMethod(page, "ToolActivityService", "getActivityForAllTools", buildDwrToolActivityRequest);
-  }
-
   async #readEwsViewInfo(page) {
     return this.#callDwrMethod(page, "NautilusViewService", "getEwsViewInfo", buildDwrEwsViewInfoRequest);
   }
@@ -702,6 +1164,17 @@ export class BbUsurtClient {
     if (!page?._forms || !page?._pageUrl) throw new Error("Open the Blackboard form first with bb_open_page and pass its pageId.");
     const form = page._forms[formIndex];
     if (!form) throw new Error(`Form index ${formIndex} is not present on that page.`);
+    const submitters = form.controls.filter(control => ["submit", "button"].includes(control.type) && !control.disabled);
+    if (!submitterName && submitters.length > 1) {
+      return {
+        confirmationRequired: true,
+        selectionRequired: "submitterName",
+        method: form.method,
+        action: new URL(form.action).pathname,
+        submitters: submitters.map(({ name, label }) => ({ name, label })),
+        message: "Choose which submit button the browser form should activate, then request the preview again. Nothing was sent.",
+      };
+    }
     const submission = await this.#serializeForm(form, fields, filePath, submitterName);
     const preview = { method: submission.method, url: `${new URL(submission.url).origin}${new URL(submission.url).pathname}`, contentType: submission.contentType.split(";")[0], fieldNames: submission.fieldNames, fileCount: filePath ? 1 : 0, submissionMode: "native HTML form semantics" };
     if (!confirmed) return { confirmationRequired: true, preview, message: "Set confirmed=true to send this form to Blackboard." };

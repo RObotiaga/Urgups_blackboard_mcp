@@ -32,19 +32,19 @@ const toolDefinitions = [
   },
   {
     name: "bb_courses",
-    description: "Список доступных курсов из вкладки Blackboard «Курсы».",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    description: "Список текущих курсов из вкладки «Курсы». Результат кэшируется на 90 секунд; передай refresh=true, если нужно перечитать вкладку сейчас.",
+    inputSchema: { type: "object", properties: { refresh: { type: "boolean", default: false } }, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
   {
     name: "bb_search_courses",
-    description: "Ищет курсы штатной формой из вкладки Blackboard «Курсы». Метод, URL, кодировка, порядок полей и тело сверяются с живой формой; при изменении запроса отправка прекращается.",
+    description: "Ищет курсы в каталоге по тексту в названии или данных преподавателя и возвращает название, инструктора и наличие действия «Зачислить». Вызывай по отдельному запросу пользователя искать новые курсы. Метод, URL, кодировка, порядок полей и тело сверяются с живой формой.",
     inputSchema: { type: "object", properties: { query: { type: "string", minLength: 1 } }, required: ["query"], additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
   {
     name: "bb_open_course",
-    description: "Открывает курс по точной ссылке href из bb_courses или bb_search_courses и возвращает ссылки его разделов.",
+    description: "Открывает зачисленный курс по точной ссылке href из bb_courses и возвращает ссылки его разделов.",
     inputSchema: { type: "object", properties: { href: { type: "string", format: "uri" } }, required: ["href"], additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
@@ -55,9 +55,92 @@ const toolDefinitions = [
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
   {
+    name: "bb_list_assignments",
+    description: "Собирает задания из разделов текущих курсов, открывает их страницы только для чтения и возвращает срок и статус отправки. По умолчанию показывает задания, для которых портал показывает форму отправки. courseYear фильтрует названия курсов, например 2026.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        courseYear: { type: "string", minLength: 1 },
+        courseHref: { type: "string", format: "uri" },
+        availableOnly: { type: "boolean", default: true },
+        limit: { type: "integer", minimum: 1, maximum: 500, default: 500 },
+        maxFoldersPerCourse: { type: "integer", minimum: 1, maximum: 500, default: 1 },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: "bb_list_upcoming_assignments",
+    description: "Быстрый список заданий из глобального календаря Blackboard: повторяет общий запрос событий интерфейса, не открывая страницы курсов и папок. Учитывает выбранные календари; показывает задания с датой, но не сообщает статус отправки и не включает задания без срока.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        daysBack: { type: "integer", minimum: 0, maximum: 3660, default: 0 },
+        daysAhead: { type: "integer", minimum: 0, maximum: 3660, default: 365 },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
     name: "bb_list_course_items",
     description: "Открывает страницу курса или папку материалов и выводит ссылки на задания, тесты, файлы и подразделы. Для вложенных папок вызови инструмент повторно с их href.",
     inputSchema: { type: "object", properties: { href: { type: "string", format: "uri" } }, required: ["href"], additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: "bb_assignment_details",
+    description: "Читает детали одного задания по ссылке из текущего содержимого курса: срок, доступность отправки, статус и актуальные поля формы. Не отправляет работу.",
+    inputSchema: { type: "object", properties: { href: { type: "string", format: "uri" } }, required: ["href"], additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: "bb_list_my_submissions",
+    description: "Список заданий на текущих курсах с доступным Blackboard статусом отправки. По умолчанию читает не более одной папки на курс; увеличь maxFoldersPerCourse для более полного, но более дорогого обхода.",
+    inputSchema: { type: "object", properties: { courseYear: { type: "string" }, courseHref: { type: "string", format: "uri" }, limit: { type: "integer", minimum: 1, maximum: 500 }, maxFoldersPerCourse: { type: "integer", minimum: 1, maximum: 500, default: 1 } }, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: "bb_submit_assignment",
+    description: "Готовит или отправляет ответ/файл в форму задания. Сначала вызови без confirmed для проверки курса, задания, полей и файла; confirmed=true отправляет. Если есть несколько кнопок отправки, сначала выбери submitterName из preview. Повторная отправка может создать новую попытку.",
+    inputSchema: { type: "object", properties: { href: { type: "string", format: "uri" }, fields: { type: "object", additionalProperties: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }] } }, filePath: { type: "string" }, submitterName: { type: "string" }, confirmed: { type: "boolean" } }, required: ["href"], additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+  },
+  {
+    name: "bb_search_course_files",
+    description: "Ищет файлы только в зачисленных курсах и сканирует не более одной папки каждого курса по умолчанию. Индекс кэшируется на пять минут и используется поиском материалов/объявлений; для скачивания передай href в bb_download_file.",
+    inputSchema: { type: "object", properties: { query: { type: "string" }, courseYear: { type: "string" }, courseHref: { type: "string", format: "uri" }, limit: { type: "integer", minimum: 1, maximum: 500 }, maxFoldersPerCourse: { type: "integer", minimum: 1, maximum: 500, default: 1 } }, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: "bb_list_calendar_events",
+    description: "Читает события выбранных календарей Blackboard за диапазон дат по общей ленте событий интерфейса.",
+    inputSchema: { type: "object", properties: { daysBack: { type: "integer", minimum: 0, maximum: 3660 }, daysAhead: { type: "integer", minimum: 0, maximum: 3660 } }, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: "bb_read_grades",
+    description: "Открывает штатную ссылку «Мои оценки» только в указанном зачисленном курсе, чтобы не обходить все курсы.",
+    inputSchema: { type: "object", properties: { courseHref: { type: "string", format: "uri" } }, required: ["courseHref"], additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: "bb_test_details",
+    description: "Показывает тесты, ссылки на которые есть на странице содержимого курса. Не открывает ссылку запуска и не начинает попытку.",
+    inputSchema: { type: "object", properties: { coursePageHref: { type: "string", format: "uri" }, testHref: { type: "string", format: "uri" } }, required: ["coursePageHref"], additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: "bb_search_course_content",
+    description: "Ищет все виды материалов по названию в папках содержимого текущих курсов; по умолчанию сканирует не более одной папки на курс. Индекс ссылок кэшируется на пять минут; используй один поиск и фильтруй результаты вместо последовательных поисков файлов и объявлений.",
+    inputSchema: { type: "object", properties: { query: { type: "string" }, courseYear: { type: "string" }, courseHref: { type: "string", format: "uri" }, limit: { type: "integer", minimum: 1, maximum: 500 }, maxFoldersPerCourse: { type: "integer", minimum: 1, maximum: 500, default: 1 } }, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: "bb_list_announcements",
+    description: "Ищет ссылки на объявления в папках содержимого текущих курсов; повторный поиск материалов/файлов/объявлений повторно использует индекс в памяти пять минут. Если объявления доступны только в отдельной ленте, результат может быть неполным.",
+    inputSchema: { type: "object", properties: { courseYear: { type: "string" }, courseHref: { type: "string", format: "uri" }, limit: { type: "integer", minimum: 1, maximum: 500 }, maxFoldersPerCourse: { type: "integer", minimum: 1, maximum: 500, default: 1 } }, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
   {
@@ -76,17 +159,17 @@ const toolDefinitions = [
     name: "bb_enroll_course",
     description: "Предлагает или выполняет GET по штатной ссылке зачисления. Первый вызов без confirmed=true возвращает предварительный план. Если Blackboard показывает отдельную форму подтверждения, её можно отправить через bb_submit_form.",
     inputSchema: { type: "object", properties: { href: { type: "string", format: "uri" }, confirmed: { type: "boolean", default: false } }, required: ["href"], additionalProperties: false },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },
   {
     name: "bb_start_test",
     description: "Открывает точную ссылку теста. Сначала возвращает план; confirmed=true может создать timed attempt и запустить отсчёт.",
     inputSchema: { type: "object", properties: { href: { type: "string", format: "uri" }, confirmed: { type: "boolean", default: false } }, required: ["href"], additionalProperties: false },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },
   {
     name: "bb_submit_form",
-    description: "Показывает план отправки или отправляет HTML-форму Blackboard. Hidden nonce и значения сессии берутся из актуальной страницы; передавай в fields только ответы. confirmed=true обязательно для фактической отправки. filePath нужен только для отправки файла.",
+    description: "Показывает план отправки или отправляет HTML-форму Blackboard. Hidden nonce и значения сессии берутся из актуальной страницы; передавай в fields только ответы. confirmed=true обязательно для фактической отправки. Если в форме несколько кнопок, выбери submitterName из preview. filePath нужен только для отправки файла.",
     inputSchema: {
       type: "object",
       properties: {
@@ -99,7 +182,7 @@ const toolDefinitions = [
       },
       required: ["pageId", "formIndex"], additionalProperties: false,
     },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },
 ];
 
@@ -139,15 +222,26 @@ const handlers = {
       note: "Cookies хранятся только в памяти текущего процесса.",
     };
   },
-  async bb_courses() { return client.listCourses(); },
+  async bb_courses({ refresh = false } = {}) { return client.listCourses({ refresh }); },
   async bb_search_courses({ query }) { return client.searchCourses(query); },
+  async bb_list_assignments({ courseYear, courseHref, availableOnly = true, limit = 500, maxFoldersPerCourse = 1 }) { return client.listAssignments({ courseYear, courseHref, availableOnly, limit, maxFoldersPerCourse }); },
+  async bb_list_upcoming_assignments({ daysBack = 0, daysAhead = 365 } = {}) { return client.listUpcomingAssignments({ daysBack, daysAhead }); },
   async bb_open_course({ href }) { return exposePage(await client.getPage(href)); },
   async bb_open_page({ href }) { return exposePage(await client.getPage(href)); },
   async bb_list_course_items({ href }) {
     const page = await client.getPage(href);
     const links = parseBlackboardLinks(page._rawHtml, page._pageUrl);
-    return { page: exposePage(page), items: links.filter(link => ["assignment", "test", "file", "course-content"].includes(link.kind)) };
+    return { page: exposePage(page), items: links.filter(link => ["assignment", "test", "file", "announcement", "course-content"].includes(link.kind)) };
   },
+  async bb_assignment_details({ href }) { return client.assignmentDetails(href); },
+  async bb_list_my_submissions({ courseYear, courseHref, limit = 500, maxFoldersPerCourse = 1 }) { return client.listMySubmissions({ courseYear, courseHref, limit, maxFoldersPerCourse }); },
+  async bb_submit_assignment({ href, fields = {}, filePath, submitterName, confirmed = false }) { return client.submitAssignment({ href, fields, filePath, submitterName, confirmed }); },
+  async bb_search_course_files({ query = "", courseYear, courseHref, limit = 100, maxFoldersPerCourse = 1 }) { return client.scanCourseContent({ query, courseYear, courseHref, kind: "file", limit, maxFoldersPerCourse }); },
+  async bb_list_calendar_events({ daysBack = 30, daysAhead = 365 } = {}) { return client.listCalendarEvents({ daysBack, daysAhead }); },
+  async bb_read_grades({ courseHref } = {}) { return client.readGrades({ courseHref }); },
+  async bb_test_details({ coursePageHref, testHref }) { return client.testDetails({ coursePageHref, testHref }); },
+  async bb_search_course_content({ query = "", courseYear, courseHref, limit = 100, maxFoldersPerCourse = 1 }) { return client.scanCourseContent({ query, courseYear, courseHref, kind: "any", limit, maxFoldersPerCourse }); },
+  async bb_list_announcements({ courseYear, courseHref, limit = 100, maxFoldersPerCourse = 1 }) { return client.listAnnouncements({ courseYear, courseHref, limit, maxFoldersPerCourse }); },
   async bb_read_notifications({ href }) { return client.readNotifications(href); },
   async bb_download_file({ href, filename }) { return client.downloadFile(href, filename); },
   async bb_enroll_course({ href, confirmed = false }) {
@@ -196,7 +290,7 @@ function validate(value, schema, pathName = "arguments") {
       return;
     }
     if (rule.type === "boolean" && typeof item !== "boolean") errors.push(`${at} должен быть boolean`);
-    if (rule.type === "integer" && (!Number.isInteger(item) || item < (rule.minimum ?? -Infinity))) errors.push(`${at} должен быть целым числом не меньше ${rule.minimum ?? 0}`);
+    if (rule.type === "integer" && (!Number.isInteger(item) || item < (rule.minimum ?? -Infinity) || item > (rule.maximum ?? Infinity))) errors.push(`${at} должен быть целым числом от ${rule.minimum ?? "−∞"} до ${rule.maximum ?? "+∞"}`);
   };
   const validateValue = (item, rule) => {
     const before = errors.length;

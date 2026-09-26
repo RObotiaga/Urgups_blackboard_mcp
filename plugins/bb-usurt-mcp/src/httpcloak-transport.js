@@ -85,7 +85,7 @@ export class HttpCloakTransport {
   constructor({
     session,
     preset = process.env.BB_USURT_BROWSER_PROFILE || "chrome-152-windows",
-    httpVersion = process.env.BB_USURT_HTTP_VERSION || "auto",
+    httpVersion = process.env.BB_USURT_HTTP_VERSION || "h1",
   } = {}) {
     this.preset = preset;
     this.httpVersion = httpVersion;

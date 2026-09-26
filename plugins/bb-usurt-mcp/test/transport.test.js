@@ -6,7 +6,17 @@ import { HttpCloakTransport } from "../src/httpcloak-transport.js";
 
 const capture = JSON.parse(await readFile(new URL("../captures/browser-observed.json", import.meta.url), "utf8"));
 
-test("wire headers on a local server match captured initial document values", async () => {
+test("default transport uses the HTTP/1.1 protocol observed in the browser", () => {
+  const transport = new HttpCloakTransport({ session: { headers: {}, close() {} } });
+  try {
+    assert.equal(capture.wireObservation.request.protocol, "http/1.1");
+    assert.equal(transport.info.httpVersion, "h1");
+  } finally {
+    transport.close();
+  }
+});
+
+test("wire headers preserve stable navigation values and use the latest captured browser version", async () => {
   const server = createServer((request, response) => {
     response.setHeader("content-type", "application/json");
     response.end(JSON.stringify({ method: request.method, rawHeaders: request.rawHeaders }));
@@ -21,7 +31,11 @@ test("wire headers on a local server match captured initial document values", as
       observed.rawHeaders[index * 2].toLowerCase(), observed.rawHeaders[index * 2 + 1],
     ]));
     assert.equal(observed.method, capture.initialDocumentRequest.method);
-    for (const [name, value] of Object.entries(capture.initialDocumentRequest.headers)) assert.equal(headers[name], value, name);
+    const versionedHeaders = new Set(["user-agent", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"]);
+    for (const [name, value] of Object.entries(capture.initialDocumentRequest.headers)) if (!versionedHeaders.has(name)) assert.equal(headers[name], value, name);
+    const latestHeaders = capture.observedRoutes.find(route => route.feature === "calendar-assignment-feed").safeHeaders;
+    const latestHeadersLower = Object.fromEntries(Object.entries(latestHeaders).map(([name, value]) => [name.toLowerCase(), value]));
+    for (const name of versionedHeaders) assert.equal(headers[name], latestHeadersLower[name], name);
   } finally {
     transport.close();
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));

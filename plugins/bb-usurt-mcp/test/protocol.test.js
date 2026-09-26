@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { assertRequestParity, BROWSER_HEADER_PROFILE, buildCourseSearchRequest } from "../src/protocol.js";
-import { BbUsurtClient, buildDwrEwsViewInfoRequest, buildDwrToolActivityRequest, encodeBrowserMultipart, parseDwrReply, summarizePage } from "../src/blackboard-client.js";
+import { BbUsurtClient, buildDwrEwsViewInfoRequest, encodeBrowserMultipart, parseCourseCatalogEntries, parseDwrReply, summarizePage } from "../src/blackboard-client.js";
 import { HttpCloakTransport } from "../src/httpcloak-transport.js";
 
 const capture = JSON.parse(await readFile(new URL("../captures/browser-observed.json", import.meta.url), "utf8"));
@@ -16,6 +16,17 @@ test("catalog search matches the body captured from the live browser form", () =
 test("search request keeps browser field ordering and form encoding", () => {
   const actual = buildCourseSearchRequest("сети и связь");
   assert.equal(actual.body, "type=Course&command=NewSearch&searchText=%D1%81%D0%B5%D1%82%D0%B8+%D0%B8+%D1%81%D0%B2%D1%8F%D0%B7%D1%8C");
+});
+
+test("catalog search parses course rows with instructor and enrollment action", () => {
+  const html = `<table><tr><td><a href="#" title="Зачислить">Зачислить</a>Название курса: 2026_Теория безопасности_Коваленко Владимир Николаевич Инструктор: Коваленко Владимир Николаевич Описание: Учебники:</td></tr></table>`;
+  assert.deepEqual(parseCourseCatalogEntries(html), [{
+    kind: "course-catalog",
+    label: "2026_Теория безопасности_Коваленко Владимир Николаевич",
+    courseName: "2026_Теория безопасности_Коваленко Владимир Николаевич",
+    instructor: "Коваленко Владимир Николаевич",
+    enrollmentAvailable: true,
+  }]);
 });
 
 test("search loads the live Courses-tab form and submits its exact native form shape", async () => {
@@ -53,7 +64,7 @@ test("search loads the live Courses-tab form and submits its exact native form s
   }
 });
 
-test("HTTPcloak session applies the captured browser header values", async () => {
+test("HTTPcloak session applies the latest captured browser header values", async () => {
   const session = { headers: { "X-Preset": "preserved" }, request: async (_method, url, options) => {
     session.last = { url, options };
     return { statusCode: 200, reason: "OK", ok: true, url, protocol: "h1", headers: {}, body: Buffer.from("ok"), text: "ok" };
@@ -61,7 +72,8 @@ test("HTTPcloak session applies the captured browser header values", async () =>
   const transport = new HttpCloakTransport({ session });
   const response = await transport.request("https://bb.usurt.ru/webapps/login/", { fetchMode: "navigate" });
   const profileByLowerName = Object.fromEntries(Object.entries(BROWSER_HEADER_PROFILE).map(([name, value]) => [name.toLowerCase(), value]));
-  for (const [name, value] of Object.entries(capture.browserHeaderProfile.headers)) assert.equal(profileByLowerName[name], value);
+  const latestHeaders = capture.observedRoutes.find(route => route.feature === "calendar-assignment-feed").safeHeaders;
+  for (const name of ["User-Agent", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"]) assert.equal(profileByLowerName[name.toLowerCase()], latestHeaders[name] ?? latestHeaders[name.toLowerCase()]);
   for (const [name, value] of Object.entries(BROWSER_HEADER_PROFILE)) assert.equal(session.headers[name], value);
   assert.equal(session.headers["X-Preset"], "preserved");
   assert.equal(session.last.options.headers["Sec-Fetch-Mode"], "navigate");
@@ -71,7 +83,12 @@ test("HTTPcloak session applies the captured browser header values", async () =>
     ...Object.entries(session.headers),
     ...Object.entries(session.last.options.headers),
   ].map(([name, value]) => [name.toLowerCase(), value]));
-  for (const [name, value] of Object.entries(capture.initialDocumentRequest.headers)) assert.equal(sentHeaders[name], value);
+  assert.equal(transport.info.httpVersion, "h1");
+  const versionedHeaderNames = new Set(["user-agent", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"]);
+  for (const [name, value] of Object.entries(capture.wireObservation.request.safeHeaders)) {
+    if (["host", "connection"].includes(name.toLowerCase()) || versionedHeaderNames.has(name.toLowerCase())) continue;
+    assert.equal(sentHeaders[name.toLowerCase()], value, name);
+  }
   assert.equal(await response.text(), "ok");
   transport.close();
 });
@@ -128,9 +145,9 @@ test("multipart form body preserves field order and binary file bytes", async ()
 
 test("notification DWR request keeps the captured route, content type and body field order", () => {
   const actual = buildDwrEwsViewInfoRequest({
-    pageUrl: "https://bb.usurt.ru/webapps/portal/execute/tabs/tabAction?tabId=tab-test&tab_tab_group_id=group-test",
-    httpSessionId: "session-test",
-    scriptSessionId: "script-test123",
+    pageUrl: "https://bb.usurt.ru/webapps/portal/execute/tabs/tabAction?tabId=_7_1&tab_tab_group_id=_7_1",
+    httpSessionId: "x".repeat(32),
+    scriptSessionId: "y".repeat(35),
   });
   const browserRequest = capture.observedRoutes.find(route => route.feature === "activity-notifications" && route.path.endsWith("getEwsViewInfo.dwr"));
   assert.equal(actual.method, browserRequest.method);
@@ -141,26 +158,9 @@ test("notification DWR request keeps the captured route, content type and body f
   for (const [name, value] of Object.entries(browserRequest.staticBodyFields)) {
     if (name !== "batchId") assert.equal(bodyLines.find(line => line.startsWith(`${name}=`)), `${name}=${value}`);
   }
+  assert.equal(Buffer.byteLength(actual.body), browserRequest.bodyBytes);
   assert.equal(actual.body.endsWith("\n"), true);
   assert.match(actual.body, /c0-scriptName=NautilusViewService\nc0-methodName=getEwsViewInfo\nc0-id=0\nc0-param0=null:null\nbatchId=0\n$/);
-});
-
-test("portal activity notifications match the live ToolActivity DWR route and fields", () => {
-  const actual = buildDwrToolActivityRequest({
-    pageUrl: "https://bb.usurt.ru/webapps/portal/execute/tabs/tabAction?tabId=tab-test&tab_tab_group_id=group-test",
-    httpSessionId: "session-test",
-    scriptSessionId: "script-test123",
-  });
-  const browserRequest = capture.observedRoutes.find(route => route.feature === "activity-notifications" && route.path.endsWith("ToolActivityService.getActivityForAllTools.dwr"));
-  assert.equal(actual.method, browserRequest.method);
-  assert.equal(new URL(actual.url).pathname, browserRequest.path);
-  assert.equal(actual.contentType, browserRequest.contentType);
-  const lines = actual.body.split("\n").filter(Boolean);
-  assert.deepEqual(lines.map(line => line.slice(0, line.indexOf("="))), browserRequest.bodyFieldOrder);
-  for (const [name, value] of Object.entries(browserRequest.staticBodyFields)) {
-    if (name !== "batchId") assert.equal(lines.find(line => line.startsWith(`${name}=`)), `${name}=${value}`);
-  }
-  assert.equal(actual.body.endsWith("\n"), true);
 });
 
 test("DWR replies are parsed as inert JSON-compatible data", () => {
