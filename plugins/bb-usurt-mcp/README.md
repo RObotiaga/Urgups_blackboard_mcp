@@ -6,7 +6,9 @@
 
 | Инструмент | Действие |
 |---|---|
-| bb_login, bb_status | Вход и состояние сессии |
+| bb_login, bb_status | Вход и состояние сессии (поддерживает аргумент account или all=true) |
+| bb_list_accounts, bb_switch_account | Список настроенных аккаунтов и переключение активного аккаунта |
+| bb_compare_submissions | Сравнение сданных и несданных работ между двумя аккаунтами |
 | bb_courses, bb_search_courses | Список и поиск курсов |
 | bb_list_assignments | Доступные к отправке задания с курсами, сроками и статусами |
 | bb_list_upcoming_assignments | Быстрый список заданий с датами из общего календаря Blackboard |
@@ -20,7 +22,7 @@
 | bb_start_test | Просмотр плана или запуск попытки после подтверждения |
 | bb_submit_form | Просмотр формы или отправка ответа/файла после подтверждения |
 
-SDK экспортирует BbUsurtClient из src/index.js. MCP-сервер регистрирует те же операции, что описаны в SKILL.md и карте API.
+SDK экспортирует BbUsurtClient и AccountManager из src/index.js. MCP-сервер регистрирует те же операции, что описаны в SKILL.md и карте API. Инструменты поддерживают опциональный параметр `account` для выполнения операций от имени конкретного пользователя.
 
 ## Запуск
 
@@ -52,8 +54,9 @@ claude --plugin-dir .
 ## SDK
 
 ~~~js
-import { BbUsurtClient } from "./src/index.js";
+import { BbUsurtClient, AccountManager } from "./src/index.js";
 
+// Работа с одним клиентом:
 const bb = new BbUsurtClient({
   username: process.env.BB_USURT_USERNAME,
   password: process.env.BB_USURT_PASSWORD,
@@ -63,6 +66,16 @@ const courses = await bb.listCourses();
 const results = await bb.searchCourses("2026");
 const assignments = await bb.listAssignments({ courseYear: "2026" });
 const upcoming = await bb.listUpcomingAssignments({ daysAhead: 365 });
+
+// Работа с несколькими аккаунтами и сравнение отправок:
+const manager = AccountManager.fromConfig();
+await manager.loginAll();
+const comparison = await manager.compareSubmissions({
+  account1: "student1",
+  account2: "student2",
+});
+// comparison.needsSubmissionByAccount2 содержит список заданий, сданных у student1,
+// но ещё не сданных у student2, со ссылками account2Href для отправки.
 ~~~
 
 `listUpcomingAssignments()` использует общий поток событий Blackboard Calendar: он читает список календарей и делает один запрос за заданиями в указанном диапазоне, не открывая курсы и папки. По умолчанию это задания с датой от сегодня до 365 дней вперёд. Календарь не сообщает статус отправки и не включает задания без срока.

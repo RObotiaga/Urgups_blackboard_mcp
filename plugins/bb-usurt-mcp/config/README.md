@@ -7,9 +7,19 @@ MCP создаёт отдельную HTTP-сессию через HTTPcloak, н
 вход остановится без обхода этой проверки.
 
 1. Установи Node.js 22 или новее.
-2. Скопируй `.env.example` в `.env` и заполни `BB_USURT_USERNAME` и
+2. Для одиночного аккаунта скопируй `.env.example` в `.env` и заполни `BB_USURT_USERNAME` и
    `BB_USURT_PASSWORD` локально. Не вставляй пароль в чат и не коммить `.env`.
-3. Из каталога пакета запусти `npm start` для проверки MCP. При работе через MCP-хост сервер
+3. Для работы с несколькими аккаунтами можно:
+   - Добавить переменные вида `BB_ACCOUNT_<ID>_USERNAME` и `BB_ACCOUNT_<ID>_PASSWORD` в `.env`:
+     ```env
+     BB_ACCOUNT_STUDENT1_USERNAME=sofronov_de
+     BB_ACCOUNT_STUDENT1_PASSWORD=secret1
+     BB_ACCOUNT_STUDENT2_USERNAME=ivanov_ii
+     BB_ACCOUNT_STUDENT2_PASSWORD=secret2
+     BB_USURT_DEFAULT_ACCOUNT=student1
+     ```
+   - Или создать файл `config/accounts.json` по образцу `config/accounts.example.json`.
+4. Из каталога пакета запусти `npm start` для проверки MCP. При работе через MCP-хост сервер
    запускается хостом командой `node src/mcp-server.js`.
 
 Успешная авторизация хранится только в памяти процесса. После перезапуска MCP

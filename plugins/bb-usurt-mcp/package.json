@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node src/mcp-server.js",
-    "test": "node --test"
+    "test": "node test/run-all.js"
   },
   "dependencies": {
     "httpcloak": "1.7.2"

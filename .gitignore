@@ -1,6 +1,9 @@
 node_modules/
 downloads/
 plugins/bb-usurt-mcp/config/.env
+plugins/bb-usurt-mcp/config/accounts.json
+plugins/bb-usurt-mcp/config/.accounts.json
 *.log
+*.pdf
 .DS_Store
 Thumbs.db

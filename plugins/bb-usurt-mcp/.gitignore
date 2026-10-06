@@ -1,4 +1,6 @@
 node_modules/
 downloads/
 config/.env
+config/accounts.json
+config/.accounts.json
 *.log
