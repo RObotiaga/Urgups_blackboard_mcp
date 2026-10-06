@@ -140,10 +140,11 @@ function formControls(markup) {
         tag: "input", type, name: attributes.name || "", value: attributes.value ?? (type === "checkbox" || type === "radio" ? "on" : ""),
         disabled: Object.hasOwn(attributes, "disabled"), checked: Object.hasOwn(attributes, "checked"),
         required: Object.hasOwn(attributes, "required"), label: attributes["aria-label"] || attributes.title || "", accept: attributes.accept || "",
+        id: attributes.id || "",
       };
     } else if (match[2] !== undefined) {
       attributes = parseAttributes(match[2]);
-      control = { tag: "textarea", type: "textarea", name: attributes.name || "", value: decodeEntities(match[3].replace(/\r?\n/g, "\n")), disabled: Object.hasOwn(attributes, "disabled"), label: attributes["aria-label"] || "" };
+      control = { tag: "textarea", type: "textarea", name: attributes.name || "", value: decodeEntities(match[3].replace(/\r?\n/g, "\n")), disabled: Object.hasOwn(attributes, "disabled"), label: attributes["aria-label"] || "", id: attributes.id || "" };
     } else if (match[4] !== undefined) {
       attributes = parseAttributes(match[4]);
       const options = [...match[5].matchAll(/<option\b([^>]*)>([\s\S]*?)<\/option\s*>/gi)].map(([, source, text]) => {
@@ -151,12 +152,12 @@ function formControls(markup) {
         return { value: option.value ?? cleanText(text), label: cleanText(text), selected: Object.hasOwn(option, "selected") };
       });
       const selected = options.filter(option => option.selected);
-      control = { tag: "select", type: "select", name: attributes.name || "", value: (selected.length ? selected : options.slice(0, 1)).map(option => option.value), disabled: Object.hasOwn(attributes, "disabled"), required: Object.hasOwn(attributes, "required"), multiple: Object.hasOwn(attributes, "multiple"), options, label: attributes["aria-label"] || "" };
+      control = { tag: "select", type: "select", name: attributes.name || "", value: (selected.length ? selected : options.slice(0, 1)).map(option => option.value), disabled: Object.hasOwn(attributes, "disabled"), required: Object.hasOwn(attributes, "required"), multiple: Object.hasOwn(attributes, "multiple"), options, label: attributes["aria-label"] || "", id: attributes.id || "" };
     } else {
       attributes = parseAttributes(match[6]);
-      control = { tag: "button", type: (attributes.type || "submit").toLowerCase(), name: attributes.name || "", value: attributes.value ?? cleanText(match[7]), disabled: Object.hasOwn(attributes, "disabled"), label: cleanText(match[7]) };
+      control = { tag: "button", type: (attributes.type || "submit").toLowerCase(), name: attributes.name || "", value: attributes.value ?? cleanText(match[7]), disabled: Object.hasOwn(attributes, "disabled"), label: cleanText(match[7]), id: attributes.id || "" };
     }
-    if (control.name || control.tag === "button") controls.push(control);
+    if (control.name || control.tag === "button" || control.type === "file") controls.push(control);
   }
   return controls;
 }
@@ -231,8 +232,8 @@ function assignmentSubmissionStatus(page) {
 }
 
 function describeForm(form) {
-  const fields = form.controls.filter(control => control.name && control.type !== "submit" && control.type !== "button").map(control => ({
-    name: control.name,
+  const fields = form.controls.filter(control => (control.name || control.type === "file") && control.type !== "submit" && control.type !== "button").map(control => ({
+    name: control.name || (control.id ? `#${control.id}` : "file"),
     type: control.type,
     label: control.label || undefined,
     options: control.options?.map(({ value, label }) => ({ value, label })),
@@ -688,7 +689,7 @@ export class BbUsurtClient {
     return { status: response.status, url: `${new URL(url).origin}${new URL(url).pathname}`, title: cleanText(html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1] || ""), courses, request: this.lastTrace?.request, browserParity: "Method, URL, content type and form body match the live Courses-tab form; body parity is byte-for-byte." };
   }
 
-  async listAssignments({ courseYear, courseHref, availableOnly = true, limit = 500, maxFoldersPerCourse = 1 } = {}) {
+  async listAssignments({ courseYear, courseHref, availableOnly = true, limit = 500, maxFoldersPerCourse = courseHref ? 20 : 1 } = {}) {
     await this.ensureAuthenticated();
     const traceStart = this.traceHistory.length;
     if (!Number.isInteger(maxFoldersPerCourse) || maxFoldersPerCourse < 1 || maxFoldersPerCourse > 500) throw new Error("maxFoldersPerCourse must be an integer from 1 to 500.");
@@ -792,7 +793,7 @@ export class BbUsurtClient {
     };
   }
 
-  async submitAssignment({ href, fields = {}, filePath, submitterName, confirmed = false }) {
+  async submitAssignment({ href, fields = {}, filePath, filePaths, submitterName, confirmed = false }) {
     await this.#assertEnrolledAssignment(href);
     const page = await this.getPage(href);
     if (new URL(page._pageUrl).pathname !== "/webapps/assignment/uploadAssignment") {
@@ -800,7 +801,17 @@ export class BbUsurtClient {
     }
     const formIndex = page._forms.findIndex(form => form.method === "POST" && new URL(form.action).pathname === "/webapps/assignment/uploadAssignment");
     if (formIndex < 0) throw new Error("This assignment page does not expose a supported submission form.");
-    const result = await this.submitForm({ page, formIndex, fields, filePath, submitterName, confirmed });
+    const form = page._forms[formIndex];
+    let effectiveSubmitter = submitterName;
+    if (!effectiveSubmitter) {
+      const submitControls = form.controls.filter(c => c.type === "submit" && !c.disabled);
+      if (submitControls.length === 1) {
+        effectiveSubmitter = submitControls[0].name;
+      } else if (submitControls.some(c => c.name === "bottom_Сохранить")) {
+        effectiveSubmitter = "bottom_Сохранить";
+      }
+    }
+    const result = await this.submitForm({ page, formIndex, fields, filePath, filePaths, submitterName: effectiveSubmitter, confirmed });
     return {
       ...result,
       note: confirmed
@@ -1160,78 +1171,219 @@ export class BbUsurtClient {
     return { savedTo: target, contentType: response.headers.get("content-type"), request: this.lastTrace?.request };
   }
 
-  async submitForm({ page, formIndex, fields = {}, filePath, submitterName, confirmed = false }) {
+  async submitForm({ page, formIndex, fields = {}, filePath, filePaths, submitterName, confirmed = false }) {
     if (!page?._forms || !page?._pageUrl) throw new Error("Open the Blackboard form first with bb_open_page and pass its pageId.");
     const form = page._forms[formIndex];
     if (!form) throw new Error(`Form index ${formIndex} is not present on that page.`);
-    const submitters = form.controls.filter(control => ["submit", "button"].includes(control.type) && !control.disabled);
-    if (!submitterName && submitters.length > 1) {
+    const submitControls = form.controls.filter(control => control.type === "submit" && !control.disabled);
+    const candidateSubmitters = submitControls.length ? submitControls : form.controls.filter(control => ["submit", "button"].includes(control.type) && !control.disabled);
+    let effectiveSubmitter = submitterName;
+    if (!effectiveSubmitter && candidateSubmitters.length === 1) {
+      effectiveSubmitter = candidateSubmitters[0].name;
+    }
+    if (!effectiveSubmitter && candidateSubmitters.length > 1) {
       return {
         confirmationRequired: true,
         selectionRequired: "submitterName",
         method: form.method,
         action: new URL(form.action).pathname,
-        submitters: submitters.map(({ name, label }) => ({ name, label })),
+        submitters: candidateSubmitters.map(({ name, label }) => ({ name, label })),
         message: "Choose which submit button the browser form should activate, then request the preview again. Nothing was sent.",
       };
     }
-    const submission = await this.#serializeForm(form, fields, filePath, submitterName);
-    const preview = { method: submission.method, url: `${new URL(submission.url).origin}${new URL(submission.url).pathname}`, contentType: submission.contentType.split(";")[0], fieldNames: submission.fieldNames, fileCount: filePath ? 1 : 0, submissionMode: "native HTML form semantics" };
+    const submission = await this.#serializeForm(form, fields, filePath, filePaths, effectiveSubmitter, page._rawHtml || "");
+    const preview = {
+      method: submission.method,
+      url: `${new URL(submission.url).origin}${new URL(submission.url).pathname}`,
+      contentType: submission.contentType.split(";")[0],
+      fieldNames: submission.fieldNames,
+      fileCount: submission.fileCount,
+      submissionMode: submission.isAjax ? "Blackboard FilePicker / AJAX submission" : "native HTML form semantics",
+    };
     if (!confirmed) return { confirmationRequired: true, preview, message: "Set confirmed=true to send this form to Blackboard." };
     await this.ensureAuthenticated();
+    const headers = { ...submission.headers, ...(submission.method === "POST" ? { Origin: BB_ORIGIN } : {}) };
+    if (submission.isAjax) {
+      headers["X-Requested-With"] = "XMLHttpRequest";
+      headers["Accept"] = "*/*";
+    }
     const response = await this.request(submission.url, {
       method: submission.method,
-      headers: { ...submission.headers, ...(submission.method === "POST" ? { Origin: BB_ORIGIN } : {}) },
+      headers,
       body: submission.body,
       contentType: submission.contentType,
       referer: page._pageUrl,
       fetchMode: "navigate",
       formFields: submission.fieldNames,
-      fileCount: filePath ? 1 : 0,
+      fileCount: submission.fileCount,
     });
     const html = await response.text();
     const finalUrl = response.url || this.lastUrl;
-    return { status: response.status, url: `${new URL(finalUrl).origin}${new URL(finalUrl).pathname}`, title: cleanText(html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1] || ""), text: cleanText(html).slice(0, 6000), request: this.lastTrace?.request, submitted: preview };
+
+    let destinationUrl = null;
+    try {
+      const parsed = JSON.parse(html);
+      if (parsed.destinationUrl) destinationUrl = parsed.destinationUrl;
+    } catch {}
+
+    if (destinationUrl) {
+      const destTarget = ensureSameOrigin(destinationUrl, this.lastUrl).href;
+      const destPage = await this.getPage(destTarget);
+      const subState = assignmentSubmissionStatus(destPage);
+      return {
+        status: response.status,
+        url: `${new URL(destTarget).origin}${new URL(destTarget).pathname}`,
+        title: destPage.title,
+        text: destPage.text.slice(0, 6000),
+        submissionStatus: subState.submissionStatus,
+        canSubmit: subState.canSubmit,
+        request: this.lastTrace?.request,
+        submitted: preview,
+      };
+    }
+
+    return {
+      status: response.status,
+      url: `${new URL(finalUrl).origin}${new URL(finalUrl).pathname}`,
+      title: cleanText(html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1] || ""),
+      text: cleanText(html).slice(0, 6000),
+      request: this.lastTrace?.request,
+      submitted: preview,
+    };
   }
 
-  async #serializeForm(form, changes, filePath, submitterName) {
-    const known = new Set(form.controls.filter(control => control.name && control.type !== "hidden").map(control => control.name));
-    for (const name of Object.keys(changes)) if (!known.has(name)) throw new Error(`Field ${name} is not an editable named field in the selected Blackboard form.`);
-    const fileControls = form.controls.filter(control => control.type === "file" && control.name && !control.disabled);
-    if (filePath && fileControls.length !== 1) throw new Error("File submission requires exactly one enabled file input in the selected form.");
-    const submitters = form.controls.filter(control => ["submit", "button"].includes(control.type) && !control.disabled);
+  async #serializeForm(form, changes = {}, filePath, filePaths, submitterName, rawHtml = "") {
+    const files = [];
+    if (filePath) {
+      if (Array.isArray(filePath)) files.push(...filePath);
+      else files.push(filePath);
+    }
+    if (filePaths) {
+      if (Array.isArray(filePaths)) files.push(...filePaths);
+      else files.push(filePaths);
+    }
+    const normalizedChanges = { ...changes };
+    if (normalizedChanges.filePath) {
+      files.push(normalizedChanges.filePath);
+      delete normalizedChanges.filePath;
+    }
+    if (normalizedChanges.filePaths) {
+      if (Array.isArray(normalizedChanges.filePaths)) files.push(...normalizedChanges.filePaths);
+      else files.push(normalizedChanges.filePaths);
+      delete normalizedChanges.filePaths;
+    }
+
+    const allControlNames = new Set(form.controls.map(control => control.name).filter(Boolean));
+    const aliasMap = {
+      comment: "student_commentstext",
+      comments: "student_commentstext",
+      text: "studentSubmission.text",
+      submissionText: "studentSubmission.text",
+    };
+    for (const [alias, target] of Object.entries(aliasMap)) {
+      if (Object.hasOwn(normalizedChanges, alias) && allControlNames.has(target) && !Object.hasOwn(normalizedChanges, target)) {
+        normalizedChanges[target] = normalizedChanges[alias];
+        delete normalizedChanges[alias];
+      }
+    }
+
+    const editableNames = new Set(form.controls.filter(control => control.name && control.type !== "hidden").map(control => control.name));
+    for (const name of Object.keys(normalizedChanges)) {
+      if (!editableNames.has(name) && !allControlNames.has(name)) {
+        throw new Error(`Field ${name} is not an editable named field in the selected Blackboard form.`);
+      }
+    }
+
+    const isAssignmentUpload = new URL(form.action).pathname === "/webapps/assignment/uploadAssignment";
+    const hasPickerDropzone = rawHtml.includes("bbFilePicker_dropzone_") || rawHtml.includes("widget.FilePicker");
+    const hasPickerInput = form.controls.some(control => control.id && control.id.endsWith("_chooseLocalFile"));
+    const isBlackboardFilePicker = isAssignmentUpload || hasPickerDropzone || hasPickerInput;
+
+    const nativeFileControls = form.controls.filter(control => control.type === "file" && control.name && !control.disabled);
+    if (files.length > 0 && !isBlackboardFilePicker && nativeFileControls.length === 0) {
+      throw new Error("File submission is not supported on this form because no file input or Blackboard file picker was found.");
+    }
+    if (!isBlackboardFilePicker && files.length > nativeFileControls.length) {
+      throw new Error(`The form has ${nativeFileControls.length} file inputs, but ${files.length} files were provided.`);
+    }
+
+    const submitControls = form.controls.filter(control => control.type === "submit" && !control.disabled);
+    const candidateSubmitters = submitControls.length ? submitControls : form.controls.filter(control => ["submit", "button"].includes(control.type) && !control.disabled);
     let selectedSubmitter;
-    if (submitterName) selectedSubmitter = submitters.find(control => control.name === submitterName);
-    else if (submitters.length === 1) selectedSubmitter = submitters[0];
-    if (submitterName && !selectedSubmitter) throw new Error(`Submit control ${submitterName} is not present in this form.`);
-    if (submitters.length > 1 && !selectedSubmitter) throw new Error("Choose submitterName because this form has multiple submit buttons.");
+    if (submitterName) {
+      selectedSubmitter = candidateSubmitters.find(control => control.name === submitterName);
+      if (!selectedSubmitter) throw new Error(`Submit control ${submitterName} is not present in this form.`);
+    } else if (candidateSubmitters.length === 1) {
+      selectedSubmitter = candidateSubmitters[0];
+    } else if (candidateSubmitters.length > 1) {
+      throw new Error("Choose submitterName because this form has multiple submit buttons.");
+    }
 
     const values = [];
+    const ajaxControl = form.controls.find(c => c.name === "isAjaxSubmit");
+    const isAjax = Boolean(isBlackboardFilePicker || (ajaxControl && ajaxControl.value === "true"));
+
     for (const control of form.controls) {
       if (!control.name || control.disabled || ["button", "reset"].includes(control.type)) continue;
-      if (control.type === "submit") { if (control === selectedSubmitter) values.push([control.name, control.value]); continue; }
+      if (control.type === "submit") {
+        if (control === selectedSubmitter) values.push([control.name, control.value]);
+        continue;
+      }
       if (control.type === "file") {
-        if (control === fileControls[0] && filePath) values.push([control.name, { filePath }]);
+        if (!isBlackboardFilePicker && nativeFileControls.includes(control)) {
+          const index = nativeFileControls.indexOf(control);
+          if (files[index]) values.push([control.name, { filePath: files[index] }]);
+        }
         continue;
       }
       if (control.type === "checkbox" || control.type === "radio") {
-        if (Object.hasOwn(changes, control.name)) {
-          const wanted = Array.isArray(changes[control.name]) ? changes[control.name].map(String) : [String(changes[control.name])];
+        if (Object.hasOwn(normalizedChanges, control.name)) {
+          const wanted = Array.isArray(normalizedChanges[control.name]) ? normalizedChanges[control.name].map(String) : [String(normalizedChanges[control.name])];
           if (wanted.includes(control.value)) values.push([control.name, control.value]);
         } else if (control.checked) values.push([control.name, control.value]);
         continue;
       }
       if (control.tag === "select" && control.multiple) {
-        const wanted = Object.hasOwn(changes, control.name) ? (Array.isArray(changes[control.name]) ? changes[control.name].map(String) : [String(changes[control.name])]) : control.value;
+        const wanted = Object.hasOwn(normalizedChanges, control.name) ? (Array.isArray(normalizedChanges[control.name]) ? normalizedChanges[control.name].map(String) : [String(normalizedChanges[control.name])]) : control.value;
         for (const value of wanted) if (control.options.some(option => option.value === value)) values.push([control.name, value]);
         continue;
       }
-      const value = Object.hasOwn(changes, control.name) ? changes[control.name] : control.tag === "select" ? control.value[0] ?? "" : control.value;
+      const value = Object.hasOwn(normalizedChanges, control.name) ? normalizedChanges[control.name] : control.tag === "select" ? control.value[0] ?? "" : control.value;
+      if (control.name === "dispatch" && isAssignmentUpload && !Object.hasOwn(normalizedChanges, "dispatch")) {
+        const isDraft = submitterName && /черновик|draft|save/i.test(submitterName);
+        values.push([control.name, isDraft ? "save" : "submit"]);
+        continue;
+      }
       if (Array.isArray(value)) for (const item of value) values.push([control.name, String(item)]);
       else values.push([control.name, String(value ?? "")]);
     }
+
+    if (isBlackboardFilePicker && files.length > 0) {
+      let baseElementName = "newFile";
+      const pickerIdMatch = form.controls.find(c => c.id && c.id.endsWith("_chooseLocalFile"))?.id?.match(/^(\w+)_chooseLocalFile$/);
+      if (pickerIdMatch) {
+        baseElementName = pickerIdMatch[1];
+      } else {
+        const match = rawHtml.match(/widget\.FilePicker\([^,]+,\s*'([^']+)'/i)
+          || rawHtml.match(/id=["']bbFilePicker_dropzone_([^"']+)["']/i);
+        if (match) baseElementName = match[1];
+      }
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        values.push([`${baseElementName}_attachmentType`, "L"]);
+        values.push([`${baseElementName}_fileId`, "new"]);
+        values.push([`${baseElementName}_artifactFileId`, ""]);
+        values.push([`${baseElementName}_artifactType`, ""]);
+        values.push([`${baseElementName}_artifactTypeResourceKey`, ""]);
+        values.push([`${baseElementName}_linkTitle`, path.basename(file)]);
+        values.push([`${baseElementName}_LocalFile${i}`, { filePath: file }]);
+      }
+      values.push([`${baseElementName}filePickerLastInput`, "dummyValue"]);
+    }
+
     const url = new URL(form.action);
-    const contentType = form.enctype;
+    const contentType = (files.length > 0 || isBlackboardFilePicker) ? "multipart/form-data" : form.enctype;
     const method = form.method;
     let body;
     let outgoingContentType;
@@ -1249,7 +1401,16 @@ export class BbUsurtClient {
       body = new URLSearchParams(values.filter(([, value]) => typeof value === "string")).toString();
       outgoingContentType = "application/x-www-form-urlencoded";
     }
-    return { method, url: url.href, body, contentType: outgoingContentType || (contentType === "multipart/form-data" ? "multipart/form-data" : contentType), headers: {}, fieldNames: [...new Set(values.map(([name]) => name))] };
+    return {
+      method,
+      url: url.href,
+      body,
+      contentType: outgoingContentType || (contentType === "multipart/form-data" ? "multipart/form-data" : contentType),
+      headers: {},
+      fieldNames: [...new Set(values.map(([name]) => name))],
+      fileCount: files.length,
+      isAjax,
+    };
   }
 }
 

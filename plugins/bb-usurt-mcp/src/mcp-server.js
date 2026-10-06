@@ -104,7 +104,7 @@ const toolDefinitions = [
   {
     name: "bb_submit_assignment",
     description: "Готовит или отправляет ответ/файл в форму задания. Сначала вызови без confirmed для проверки курса, задания, полей и файла; confirmed=true отправляет. Если есть несколько кнопок отправки, сначала выбери submitterName из preview. Повторная отправка может создать новую попытку.",
-    inputSchema: { type: "object", properties: { href: { type: "string", format: "uri" }, fields: { type: "object", additionalProperties: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }] } }, filePath: { type: "string" }, submitterName: { type: "string" }, confirmed: { type: "boolean" } }, required: ["href"], additionalProperties: false },
+    inputSchema: { type: "object", properties: { href: { type: "string", format: "uri" }, fields: { type: "object", additionalProperties: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }] } }, filePath: { type: "string" }, filePaths: { type: "array", items: { type: "string" } }, submitterName: { type: "string" }, confirmed: { type: "boolean" } }, required: ["href"], additionalProperties: false },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },
   {
@@ -177,6 +177,7 @@ const toolDefinitions = [
         formIndex: { type: "integer", minimum: 0 },
         fields: { type: "object", additionalProperties: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }] }, default: {} },
         filePath: { type: "string" },
+        filePaths: { type: "array", items: { type: "string" } },
         submitterName: { type: "string" },
         confirmed: { type: "boolean", default: false },
       },
@@ -235,7 +236,7 @@ const handlers = {
   },
   async bb_assignment_details({ href }) { return client.assignmentDetails(href); },
   async bb_list_my_submissions({ courseYear, courseHref, limit = 500, maxFoldersPerCourse = 1 }) { return client.listMySubmissions({ courseYear, courseHref, limit, maxFoldersPerCourse }); },
-  async bb_submit_assignment({ href, fields = {}, filePath, submitterName, confirmed = false }) { return client.submitAssignment({ href, fields, filePath, submitterName, confirmed }); },
+  async bb_submit_assignment({ href, fields = {}, filePath, filePaths, submitterName, confirmed = false }) { return client.submitAssignment({ href, fields, filePath, filePaths, submitterName, confirmed }); },
   async bb_search_course_files({ query = "", courseYear, courseHref, limit = 100, maxFoldersPerCourse = 1 }) { return client.scanCourseContent({ query, courseYear, courseHref, kind: "file", limit, maxFoldersPerCourse }); },
   async bb_list_calendar_events({ daysBack = 30, daysAhead = 365 } = {}) { return client.listCalendarEvents({ daysBack, daysAhead }); },
   async bb_read_grades({ courseHref } = {}) { return client.readGrades({ courseHref }); },
@@ -252,8 +253,8 @@ const handlers = {
     const result = await client.startTest(href, confirmed);
     return result._rawHtml ? exposePage(result) : result;
   },
-  async bb_submit_form({ pageId, formIndex, fields = {}, filePath, submitterName, confirmed = false }) {
-    return client.submitForm({ page: pageById(pageId), formIndex, fields, filePath, submitterName, confirmed });
+  async bb_submit_form({ pageId, formIndex, fields = {}, filePath, filePaths, submitterName, confirmed = false }) {
+    return client.submitForm({ page: pageById(pageId), formIndex, fields, filePath, filePaths, submitterName, confirmed });
   },
 };
 

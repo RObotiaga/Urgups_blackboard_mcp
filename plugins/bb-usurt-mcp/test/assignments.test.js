@@ -187,3 +187,63 @@ test("notification reads use the dashboard DWR call without the global-navigatio
   assert.equal(dwrCalls[0].headers["Content-Type"], "text/plain");
   client.close();
 });
+
+test("assignment submission with file attaches FilePicker fields and submits via AJAX", async () => {
+  const assignmentHref = "https://bb.usurt.ru/webapps/assignment/uploadAssignment?content_id=_task_file&course_id=_course_1&group_id=&mode=view";
+  const assignmentHtml = `<title>Отправить задание: Лабораторная</title>
+    <form action="/webapps/assignment/uploadAssignment?action=submit" method="post" id="uploadAssignmentFormId">
+      <input type="hidden" name="nonce" value="tok123">
+      <input type="hidden" name="course_id" value="_course_1">
+      <input type="hidden" name="content_id" value="_task_file">
+      <input type="hidden" name="dispatch" value="">
+      <input type="hidden" name="isAjaxSubmit" value="true">
+      <input class="hiddenInput" type="file" tabindex="-1" multiple aria-hidden="true" id="newFile_chooseLocalFile">
+      <input type="submit" name="bottom_Сохранить" value="Сохранить">
+    </form>`;
+  const destUrl = "https://bb.usurt.ru/webapps/assignment/uploadAssignment?course_id=_course_1&content_id=_task_file&mode=view";
+  const submittedHtml = '<title>Просмотреть историю отправки</title><p>Последняя оцененная попытка</p><p>Отправка package.json</p>';
+  const routes = new Map([
+    [portalUrl, { body: portalHtml }],
+    [coursesUrl, { body: moduleHtml }],
+    [ajaxUrl, { body: coursesXml }],
+    [assignmentHref, { body: assignmentHtml }],
+    ["https://bb.usurt.ru/webapps/assignment/uploadAssignment?action=submit", {
+      body: JSON.stringify({ destinationUrl: "/webapps/assignment/uploadAssignment?course_id=_course_1&content_id=_task_file&mode=view" }),
+      headers: { "content-type": "application/json" }
+    }],
+    [destUrl, { body: submittedHtml }],
+  ]);
+  const transport = mockTransport(routes);
+  const client = clientFor(transport);
+
+  // Test preview first
+  const preview = await client.submitAssignment({
+    href: assignmentHref,
+    filePath: "package.json",
+    confirmed: false,
+  });
+  assert.equal(preview.confirmationRequired, true);
+  assert.equal(preview.preview.fileCount, 1);
+  assert.equal(preview.preview.submissionMode, "Blackboard FilePicker / AJAX submission");
+  assert.equal(preview.preview.fieldNames.includes("newFile_LocalFile0"), true);
+  assert.equal(preview.preview.fieldNames.includes("newFile_attachmentType"), true);
+
+  // Test confirmed submission
+  const result = await client.submitAssignment({
+    href: assignmentHref,
+    filePath: "package.json",
+    confirmed: true,
+  });
+  assert.equal(result.status, 200);
+  assert.equal(result.submissionStatus, "submitted");
+  assert.equal(result.title, "Просмотреть историю отправки");
+  const postCall = transport.calls.find(call => call.url.includes("action=submit"));
+  assert.ok(postCall);
+  assert.equal(postCall.headers["X-Requested-With"], "XMLHttpRequest");
+  assert.match(postCall.headers["Content-Type"], /^multipart\/form-data; boundary=/);
+  assert.match(postCall.body.toString("utf8"), /name="dispatch"\r\n\r\nsubmit/);
+  assert.match(postCall.body.toString("utf8"), /name="newFile_attachmentType"\r\n\r\nL/);
+  assert.match(postCall.body.toString("utf8"), /name="newFile_LocalFile0"; filename="package.json"/);
+
+  client.close();
+});

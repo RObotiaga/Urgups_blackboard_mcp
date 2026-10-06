@@ -86,6 +86,7 @@ export class HttpCloakTransport {
     session,
     preset = process.env.BB_USURT_BROWSER_PROFILE || "chrome-152-windows",
     httpVersion = process.env.BB_USURT_HTTP_VERSION || "h1",
+    timeout = Number.parseInt(process.env.BB_USURT_TIMEOUT || "60", 10),
   } = {}) {
     this.preset = preset;
     this.httpVersion = httpVersion;
@@ -94,8 +95,9 @@ export class HttpCloakTransport {
       httpVersion,
       allowRedirects: false,
       maxRedirects: 10,
-      retry: 0,
+      retry: 2,
       verify: true,
+      timeout,
     });
     this.session.headers = { ...(this.session.headers ?? {}), ...BROWSER_HEADER_PROFILE };
   }
