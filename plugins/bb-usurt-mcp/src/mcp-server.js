@@ -284,6 +284,22 @@ const toolDefinitions = [
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
   {
+    name: "bb_report_grades",
+    description: "Просмотр всех оценок и академических задолженностей студента из официальной ведомости УрГУПС (https://report.usurt.ru/uspev.aspx) по номеру зачётной книжки. Возвращает общую сводку успеваемости, количество долгов, средний балл, список задолженностей и все дисциплины по курсам и семестрам. Поддерживает фильтрацию только задолженностей (onlyDebts), а также по курсу и семестру.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        recordBook: { type: "string" },
+        account: { type: "string" },
+        onlyDebts: { type: "boolean", default: false },
+        course: { type: "string" },
+        semester: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
     name: "bb_test_details",
     description: "Показывает тесты, ссылки на которые есть на странице содержимого курса. Не открывает ссылку запуска и не начинает попытку.",
     inputSchema: {
@@ -512,6 +528,13 @@ const handlers = {
   },
   async bb_read_grades({ account, courseHref } = {}) {
     return clientFor(account).readGrades({ courseHref });
+  },
+  async bb_report_grades({ account, recordBook, onlyDebts = false, course, semester } = {}) {
+    const effectiveRecordBook = recordBook || accountManager.getRecordBook(account);
+    if (!effectiveRecordBook) {
+      throw new Error("Укажите номер зачётной книжки в параметре recordBook (например: recordBook: '20220123') или настройте BB_USURT_RECORD_BOOK в config/.env.");
+    }
+    return clientFor(account).getReportGrades({ recordBook: effectiveRecordBook, onlyDebts, course, semester });
   },
   async bb_test_details({ account, coursePageHref, testHref }) {
     return clientFor(account).testDetails({ coursePageHref, testHref });

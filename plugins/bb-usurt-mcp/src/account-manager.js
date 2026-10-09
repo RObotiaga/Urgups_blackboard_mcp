@@ -145,6 +145,7 @@ export class AccountManager {
                   id: item.id || item.username,
                   username: item.username,
                   password: item.password,
+                  recordBook: item.recordBook,
                   downloadDir: item.downloadDir,
                 });
               }
@@ -156,6 +157,7 @@ export class AccountManager {
                   id: item.id || id,
                   username: item.username,
                   password: item.password,
+                  recordBook: item.recordBook,
                   downloadDir: item.downloadDir,
                 });
               }
@@ -179,6 +181,7 @@ export class AccountManager {
                 id: item.id || item.username,
                 username: item.username,
                 password: item.password,
+                recordBook: item.recordBook,
               });
             }
           }
@@ -189,6 +192,7 @@ export class AccountManager {
                 id: item.id || id,
                 username: item.username,
                 password: item.password,
+                recordBook: item.recordBook,
               });
             }
           }
@@ -207,8 +211,10 @@ export class AccountManager {
         const username = env[key];
         const passKey = Object.keys(env).find(k => k.toLowerCase() === `bb_account_${accountId}_password`);
         const password = passKey ? env[passKey] : "";
+        const recKey = Object.keys(env).find(k => k.toLowerCase() === `bb_account_${accountId}_record_book`);
+        const recordBook = recKey ? env[recKey] : undefined;
         if (username) {
-          manager.addAccount({ id: accountId, username, password });
+          manager.addAccount({ id: accountId, username, password, recordBook });
         }
       }
     }
@@ -224,6 +230,7 @@ export class AccountManager {
           id: "default",
           username: legacyUsername,
           password: env.BB_USURT_PASSWORD,
+          recordBook: env.BB_USURT_RECORD_BOOK,
         });
       }
     }
@@ -249,16 +256,22 @@ export class AccountManager {
     return Boolean(this.getAccount(identifier));
   }
 
-  addAccount({ id, username, password, transport, client, downloadDir }) {
+  addAccount({ id, username, password, recordBook, transport, client, downloadDir }) {
     const rawId = String(id || username || "default").trim();
     if (!rawId) throw new Error("Укажите идентификатор или логин аккаунта.");
     const key = rawId.toLowerCase();
+
+    const effectiveRecordBook =
+      recordBook ||
+      client?.recordBook ||
+      (username && /^\d{5,12}$/.test(String(username).trim()) ? String(username).trim() : null);
 
     const effectiveClient =
       client ??
       new BbUsurtClient({
         username,
         password,
+        recordBook: effectiveRecordBook,
         downloadDir: downloadDir || this.downloadDir,
         transport: transport ?? this.transportFactory(),
       });
@@ -266,6 +279,7 @@ export class AccountManager {
     const entry = {
       id: rawId,
       username: username || effectiveClient.username || rawId,
+      recordBook: effectiveRecordBook,
       client: effectiveClient,
     };
 
@@ -276,6 +290,19 @@ export class AccountManager {
     }
 
     return entry;
+  }
+
+  getRecordBook(identifier) {
+    const entry = this.getAccount(identifier);
+    if (entry?.recordBook) return entry.recordBook;
+    if (entry?.username && /^\d{5,12}$/.test(String(entry.username).trim())) {
+      return String(entry.username).trim();
+    }
+    const envVal = process.env.BB_USURT_RECORD_BOOK;
+    if (envVal && (!identifier || identifier === "default" || identifier === this.activeAccountId)) {
+      return envVal.trim();
+    }
+    return null;
   }
 
   getAccount(identifier) {

@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { BB_ORIGIN, BB_ROUTES, assertRequestParity, buildCourseSearchRequest, canonicalRequest } from "./protocol.js";
 import { HttpCloakTransport } from "./httpcloak-transport.js";
+import { getStudentRecordBook } from "./report-scraper.js";
 
 const assignmentWords = /задан|домашн|assignment/i;
 const testWords = /тест|экзам|зач[её]т|assessment|test/i;
@@ -456,10 +457,11 @@ export function buildDwrEwsViewInfoRequest({ pageUrl, httpSessionId, scriptSessi
 }
 
 export class BbUsurtClient {
-  constructor({ transport = new HttpCloakTransport(), username = process.env.BB_USURT_USERNAME, password = process.env.BB_USURT_PASSWORD, downloadDir = process.env.BB_USURT_DOWNLOAD_DIR || path.resolve("downloads") } = {}) {
+  constructor({ transport = new HttpCloakTransport(), username = process.env.BB_USURT_USERNAME, password = process.env.BB_USURT_PASSWORD, recordBook = process.env.BB_USURT_RECORD_BOOK, downloadDir = process.env.BB_USURT_DOWNLOAD_DIR || path.resolve("downloads") } = {}) {
     this.transport = transport;
     this.username = username;
     this.password = password;
+    this.recordBook = recordBook || (username && /^\d{5,12}$/.test(String(username).trim()) ? String(username).trim() : null);
     this.downloadDir = path.resolve(downloadDir);
     this.authenticated = false;
     this.lastUrl = BB_ORIGIN;
@@ -980,14 +982,68 @@ export class BbUsurtClient {
       try {
         const page = await this.getPage(course.href);
         const links = parseLinks(page._rawHtml, page._pageUrl);
-        const href = links.find(link => new URL(link.href).pathname === BB_ROUTES.myGrades)?.href;
+        const href =
+          links.find(link => new URL(link.href).pathname === BB_ROUTES.myGrades)?.href ||
+          links.find(link => /мои оценки|my grades/i.test(link.label))?.href ||
+          links.find(link => link.href.includes("tool_type=TOOL") && /оценк|grade/i.test(link.label))?.href;
         if (!href) { warnings.push({ course: course.label, message: "No live My Grades link was exposed by this course page." }); continue; }
         const gradePage = await this.getPage(href);
-        const rows = [...gradePage._rawHtml.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr\s*>/gi)].map(([, row]) => [...row.matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]\s*>/gi)].map(([, cell]) => cleanText(cell))).filter(row => row.length);
-        grades.push({ course: course.label, title: gradePage.title, rows, text: gradePage.text });
+
+        const itemRows = [];
+        const rowRegex = /<div\b[^>]*class=["'][^"']*sortable_item_row[^"']*["'][^>]*>([\s\S]*?)(?=(?:<div\b[^>]*class=["'][^"']*sortable_item_row|$))/gi;
+        let rMatch;
+        while ((rMatch = rowRegex.exec(gradePage._rawHtml)) !== null) {
+          const rowHtml = rMatch[0];
+          const itemMatch = rowHtml.match(/<div\b[^>]*class=["'][^"']*cell gradable[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+          const itemText = itemMatch ? cleanText(itemMatch[1]) : "";
+          const catMatch = rowHtml.match(/<div\b[^>]*class=["'][^"']*itemCat[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+          const catText = catMatch ? cleanText(catMatch[1]) : "";
+          const title = (catText && itemText.endsWith(catText) ? itemText.slice(0, -catText.length).trim() : itemText)
+            .replace(/['"]\s*\);\s*"?\s*\/?\s*>?$/g, "")
+            .replace(/\s+/g, " ")
+            .trim();
+          const activityMatch = rowHtml.match(/<div\b[^>]*class=["'][^"']*cell activity[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+          const activityText = activityMatch ? cleanText(activityMatch[1]) : "";
+          const gradeMatch = rowHtml.match(/<div\b[^>]*class=["'][^"']*cell grade[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+          const gradeText = gradeMatch ? cleanText(gradeMatch[1]).replace(/\s+/g, " ").trim() : "";
+          const pointsMatch = rowHtml.match(/<span\b[^>]*class=["'][^"']*pointsPossible[^"']*["'][^>]*>([\s\S]*?)<\/span>/i);
+          const pointsText = pointsMatch ? cleanText(pointsMatch[1]) : "";
+          const statusMatch = rowHtml.match(/<div\b[^>]*class=["'][^"']*cell gradeStatus[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+          const statusText = statusMatch ? cleanText(statusMatch[1]) : "";
+
+          itemRows.push({
+            title,
+            category: catText,
+            activity: activityText,
+            grade: gradeText,
+            pointsPossible: pointsText,
+            status: statusText,
+          });
+        }
+
+        const tableRows = [...gradePage._rawHtml.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr\s*>/gi)].map(([, row]) => [...row.matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]\s*>/gi)].map(([, cell]) => cleanText(cell))).filter(row => row.length);
+        const rows = itemRows.length > 0
+          ? itemRows.map(it => [it.title, it.category, it.activity, it.grade, it.status].filter(Boolean))
+          : tableRows;
+
+        grades.push({
+          course: course.label,
+          title: gradePage.title,
+          items: itemRows,
+          rows,
+          text: gradePage.text,
+        });
       } catch (error) { warnings.push({ course: course.label, message: error instanceof Error ? error.message : String(error) }); }
     }
     return { coursesScanned: selected.length, grades, warnings, note: "Grade rows are extracted from server-rendered My Grades tables; layout variations may require an updated parser." };
+  }
+
+  async getReportGrades({ recordBook, onlyDebts = false, course, semester, fetchFn } = {}) {
+    const targetBook = recordBook || this.recordBook;
+    if (!targetBook) {
+      throw new Error("Укажите номер зачётной книжки в параметре recordBook (например: recordBook: '20220123') или настройте BB_USURT_RECORD_BOOK в config/.env.");
+    }
+    return getStudentRecordBook(targetBook, { onlyDebts, course, semester, fetchFn });
   }
 
   async testDetails({ coursePageHref, testHref }) {

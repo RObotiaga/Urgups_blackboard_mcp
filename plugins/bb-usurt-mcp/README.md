@@ -15,7 +15,8 @@
 | bb_assignment_details, bb_list_my_submissions, bb_submit_assignment | Детали задания, доступный статус отправки, план/подтверждённая отправка |
 | bb_open_course, bb_open_page, bb_list_course_items | Страницы курсов, папки и материалы |
 | bb_search_course_files, bb_search_course_content | Поиск по названиям материалов только в разделах зачисленных курсов |
-| bb_list_calendar_events, bb_read_grades, bb_test_details, bb_list_announcements | События календаря, оценки, ссылки на тесты без запуска, объявления из содержимого курсов |
+| bb_list_calendar_events, bb_read_grades, bb_test_details, bb_list_announcements | События календаря, оценки в курсе Blackboard, ссылки на тесты без запуска, объявления из содержимого курсов |
+| bb_report_grades | Просмотр всех оценок и академических задолженностей студента из официальной ведомости УрГУПС (report.usurt.ru/uspev.aspx) по зачётной книжке |
 | bb_read_notifications | Чтение уведомлений |
 | bb_download_file | Скачивание файла курса |
 | bb_enroll_course | Просмотр плана или зачисление после подтверждения |
