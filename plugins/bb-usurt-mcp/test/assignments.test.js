@@ -247,3 +247,65 @@ test("assignment submission with file attaches FilePicker fields and submits via
 
   client.close();
 });
+
+test("listUpcomingAssignments includes tests and gradable calendar events", async () => {
+  const calendarLaunchUrl = "https://bb.usurt.ru/webapps/blackboard/execute/viewCalendar";
+  const portalWithCalendar = `<a href="${calendarLaunchUrl}">Календарь</a>`;
+  const eventsData = [
+    {
+      calendarName: "ПДС",
+      title: "3т-5",
+      start: "2026-11-02T12:00:00",
+      eventType: "Тест",
+      attemptable: true,
+      gradable: true,
+    },
+    {
+      calendarName: "Сети",
+      title: "Лабораторная 1",
+      start: "2026-11-05T12:00:00",
+      eventType: "Задание",
+      attemptable: true,
+      gradable: true,
+    },
+    {
+      calendarName: "Личный",
+      title: "Встреча",
+      start: "2026-11-03T12:00:00",
+      eventType: "Личное событие",
+      attemptable: false,
+      gradable: false,
+    },
+  ];
+
+  const routes = new Map([
+    [portalUrl, { body: portalWithCalendar }],
+    [calendarLaunchUrl, { body: "<title>Календарь</title>" }],
+  ]);
+
+  const transport = mockTransport(routes);
+  const origRequest = transport.request;
+  transport.request = async (url, options) => {
+    if (url.includes("/selectedCalendarEvents")) {
+      transport.calls.push({ url, ...options });
+      return {
+        ok: true,
+        status: 200,
+        url,
+        protocol: "h1",
+        headers: { get: () => "application/json" },
+        text: async () => JSON.stringify(eventsData),
+      };
+    }
+    return origRequest.call(transport, url, options);
+  };
+
+  const client = clientFor(transport);
+  const result = await client.listUpcomingAssignments({ daysAhead: 10 });
+  assert.equal(result.totalAssignments, 2);
+  assert.equal(result.assignments[0].title, "3т-5");
+  assert.equal(result.assignments[0].eventType, "Тест");
+  assert.equal(result.assignments[1].title, "Лабораторная 1");
+  assert.equal(result.assignments[1].eventType, "Задание");
+  client.close();
+});

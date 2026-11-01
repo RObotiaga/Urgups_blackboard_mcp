@@ -147,6 +147,7 @@ export class AccountManager {
                   password: item.password,
                   recordBook: item.recordBook,
                   downloadDir: item.downloadDir,
+                  readOnly: item.readOnly === true,
                 });
               }
             }
@@ -159,6 +160,7 @@ export class AccountManager {
                   password: item.password,
                   recordBook: item.recordBook,
                   downloadDir: item.downloadDir,
+                  readOnly: item.readOnly === true,
                 });
               }
             }
@@ -256,7 +258,7 @@ export class AccountManager {
     return Boolean(this.getAccount(identifier));
   }
 
-  addAccount({ id, username, password, recordBook, transport, client, downloadDir }) {
+  addAccount({ id, username, password, recordBook, transport, client, downloadDir, readOnly = false }) {
     const rawId = String(id || username || "default").trim();
     if (!rawId) throw new Error("Укажите идентификатор или логин аккаунта.");
     const key = rawId.toLowerCase();
@@ -275,6 +277,14 @@ export class AccountManager {
         downloadDir: downloadDir || this.downloadDir,
         transport: transport ?? this.transportFactory(),
       });
+
+    if (readOnly) {
+      for (const method of ["submitAssignment", "enrollCourse", "startTest", "submitForm"]) {
+        effectiveClient[method] = async () => {
+          throw new Error(`Аккаунт ${rawId} в режиме read-only: действие ${method} запрещено.`);
+        };
+      }
+    }
 
     const entry = {
       id: rawId,

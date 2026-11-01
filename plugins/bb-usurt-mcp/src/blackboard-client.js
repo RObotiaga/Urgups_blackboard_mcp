@@ -10,6 +10,7 @@ import { getStudentRecordBook } from "./report-scraper.js";
 
 const assignmentWords = /задан|домашн|assignment/i;
 const testWords = /тест|экзам|зач[её]т|assessment|test/i;
+const upcomingGradableWords = /задан|домашн|assignment|тест|экзам|зач[её]т|test|assessment/i;
 const fileExtension = /\.(pdf|docx?|xlsx?|pptx?|zip|rar|7z|txt|rtf|jpg|jpeg|png|mp4)(?:$|[?#])/i;
 const activityWords = /уведомлен|новости|активност|activity|notification|stream/i;
 const announcementWords = /объявлен|announc|announcement/i;
@@ -1073,7 +1074,7 @@ export class BbUsurtClient {
     const { events, range } = feed;
 
     const assignments = events
-      .filter(event => typeof event?.eventType === "string" && assignmentWords.test(event.eventType))
+      .filter(event => (typeof event?.eventType === "string" && upcomingGradableWords.test(event.eventType)) || event.gradable === true || event.attemptable === true)
       .map(event => ({
         course: event.calendarNameLocalizable?.rawValue || event.calendarName || "",
         title: cleanText(event.title || "Без названия"),
