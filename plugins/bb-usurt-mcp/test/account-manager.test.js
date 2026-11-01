@@ -29,7 +29,7 @@ test("AccountManager initializes from environment variables with multiple accoun
     BB_USURT_DEFAULT_ACCOUNT: "student1",
   };
 
-  const manager = AccountManager.fromConfig({ env, transportFactory: () => mockTransport() });
+  const manager = AccountManager.fromConfig({ env, configDir: "/nonexistent", transportFactory: () => mockTransport() });
   assert.equal(manager.size, 2);
   assert.equal(manager.getActiveAccount().id, "student1");
   assert.equal(manager.getActiveAccount().username, "stud1");
@@ -78,7 +78,7 @@ test("AccountManager falls back to legacy BB_USURT_USERNAME and BB_USURT_PASSWOR
     BB_USURT_PASSWORD: "legacy_password",
   };
 
-  const manager = AccountManager.fromConfig({ env, transportFactory: () => mockTransport() });
+  const manager = AccountManager.fromConfig({ env, configDir: "/nonexistent", transportFactory: () => mockTransport() });
   assert.equal(manager.size, 1);
   assert.equal(manager.getActiveAccount().id, "default");
   assert.equal(manager.getActiveAccount().username, "legacy_user");
